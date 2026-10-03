@@ -1198,4 +1198,6 @@ impl AjoContract {
 }
 
 #[cfg(test)]
+mod prop;
+#[cfg(test)]
 mod test;

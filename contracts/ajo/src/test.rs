@@ -5,8 +5,8 @@ use super::*;
 use soroban_sdk::{
     testutils::{
         storage::{Instance as _, Persistent as _},
-        Address as _, AuthorizedFunction, AuthorizedInvocation, Events as _, IssuerFlags, Ledger,
-        StellarAssetIssuer,
+        Address as _, AuthorizedFunction, AuthorizedInvocation, EnvTestConfig, Events as _,
+        IssuerFlags, Ledger, StellarAssetIssuer,
     },
     token::{StellarAssetClient, TokenClient},
     vec, Address, Env, Event as _, IntoVal, Symbol,
@@ -31,7 +31,10 @@ pub(crate) struct Setup<'a> {
 }
 
 pub(crate) fn setup(n: u32, start_balance: i128) -> Setup<'static> {
-    let env = Env::default();
+    // No JSON snapshot per Env: property tests create tens of thousands.
+    let env = Env::new_with_config(EnvTestConfig {
+        capture_snapshot_at_drop: false,
+    });
     env.mock_all_auths();
     env.ledger().set_timestamp(T0);
 
