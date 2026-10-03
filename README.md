@@ -6,6 +6,21 @@ Built for the Stellar **"Find Your Way"** hackathon (General Track).
 
 > ⚠️ Everything here runs on **Stellar Testnet**. The "USDC" used in the demo is a **test asset issued by a throwaway account** and wrapped in a Stellar Asset Contract. It is **not** Circle USDC and has no value.
 
+## Screenshots
+
+| Home | Circle dashboard |
+|---|---|
+| ![Home](docs/screenshots/desktop-home.png) | ![Circle dashboard with a default round](docs/screenshots/desktop-circle-1.png) |
+| **Start a circle** | **Completed circle** |
+| ![Create a circle](docs/screenshots/desktop-create.png) | ![Completed circle](docs/screenshots/desktop-circle-0.png) |
+
+<p>
+  <img src="docs/screenshots/mobile-home.png" alt="Mobile home" width="260" />
+  <img src="docs/screenshots/mobile-circle-0.png" alt="Mobile circle dashboard" width="260" />
+</p>
+
+Design: warm paper palette with a clay accent and adire-indigo pattern (a nod to Yoruba resist-dyed cloth), Fraunces for headings and numbers, Inter Tight for UI, JetBrains Mono for addresses. The circle dashboard draws the group as a ring: members in payout order, the current recipient in clay, paid / already-received / defaulted marks on each seat.
+
 ---
 
 ## The problem
