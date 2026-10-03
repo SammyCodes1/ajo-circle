@@ -137,7 +137,7 @@ export default function CirclePage() {
     setTxErr(null);
     setTxMsg(null);
     try {
-      const r = await ajo.payout(me, id);
+      const r = await ajo.settle(me, id);
       setTxMsg(
         <>
           Paid out {formatAmount(BigInt((r.returnValue as bigint | undefined) ?? 0))} {config.tokenCode} to{" "}

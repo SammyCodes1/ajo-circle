@@ -102,7 +102,7 @@ export default function CreatePage() {
     setBusy(true);
     setError(null);
     try {
-      const res = await ajo.createCircle(w.address, contribution, members, period);
+      const res = await ajo.createCircle(w.address, contribution, members, period, 24 * 60 * 60);
       setDone({ id: Number(res.returnValue), hash: res.hash });
     } catch (err) {
       setError(friendlyError(err, "create"));
