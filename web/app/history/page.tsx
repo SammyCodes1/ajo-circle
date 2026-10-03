@@ -69,7 +69,7 @@ export default function HistoryPage() {
             </div>
           </div>
           <div className="mx-auto w-48 opacity-90 sm:w-full">
-            <RotationRing members={GHOST} current={2} showLabels={false} title="Illustration" />
+            <RotationRing members={GHOST} current={2} showLabels={false} title="Illustration" decorative />
           </div>
         </div>
       </section>
@@ -133,7 +133,7 @@ export default function HistoryPage() {
                   className="group block animate-rise rounded-xl border border-line bg-ivory p-5 transition-[border-color,box-shadow] duration-300 hover:border-line-strong hover:shadow-[0_10px_30px_-18px_rgb(31_30_29/0.35)] sm:p-6"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
+                    <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
                     {done ? <Pill tone="sage" dot>Completed</Pill> : <Pill>Round {c.round + 1} of {c.members.length}</Pill>}
                   </div>
                   <p className="mt-3 text-ink-soft">

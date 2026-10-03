@@ -2,7 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Fraunces, Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { WalletProvider } from "@/components/WalletProvider";
-import { Header } from "@/components/Header";
+import { Header, MobileNav } from "@/components/Header";
+import { Banners } from "@/components/Banners";
 import { Footer } from "@/components/Footer";
 
 const fraunces = Fraunces({
@@ -41,15 +42,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <WalletProvider>
           <a
             href="#main"
-            className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-ink focus:px-3 focus:py-2 focus:text-ivory"
+            className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-[var(--z-toast)] focus:rounded-lg focus:bg-ink focus:px-3 focus:py-2 focus:text-ivory"
           >
             Skip to content
           </a>
           <Header />
-          <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-5 pb-16 pt-8 sm:px-8 sm:pt-12">
+          <Banners />
+          <main id="main" className="mx-auto w-full max-w-6xl flex-1 px-4 pb-16 pt-8 sm:px-8 sm:pt-12">
             {children}
           </main>
           <Footer />
+          <MobileNav />
         </WalletProvider>
       </body>
     </html>

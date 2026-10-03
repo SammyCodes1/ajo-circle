@@ -27,7 +27,39 @@ function shortAddr(a: string) {
  * 12 o'clock and rotating clockwise. The clay arc traces how far the pot has
  * travelled; the current recipient is highlighted.
  */
-export function RotationRing({
+type RingProps = {
+  members: RingMember[];
+  /** Index of this round's recipient, or -1 when the circle is complete. */
+  current: number;
+  me?: string | null;
+  showLabels?: boolean;
+  children?: React.ReactNode;
+  className?: string;
+  title?: string;
+  /** Purely illustrative ring (hidden from assistive tech). */
+  decorative?: boolean;
+};
+
+/**
+ * Responsive wrapper: on phones (< sm) outer address labels would render below
+ * 12px, so the compact numbered ring is shown instead (the member list below
+ * the ring carries the addresses). From sm up, labelled ring.
+ */
+export function RotationRing(props: RingProps) {
+  if (!props.showLabels && props.showLabels !== undefined) return <RingView {...props} showLabels={false} />;
+  return (
+    <>
+      <div className="sm:hidden">
+        <RingView {...props} showLabels={false} />
+      </div>
+      <div className="hidden sm:block">
+        <RingView {...props} showLabels />
+      </div>
+    </>
+  );
+}
+
+function RingView({
   members,
   current,
   me,
@@ -35,7 +67,9 @@ export function RotationRing({
   children,
   className = "",
   title = "Payout rotation",
+  decorative = false,
 }: {
+  decorative?: boolean;
   members: RingMember[];
   /** Index of this round's recipient, or -1 when the circle is complete. */
   current: number;
@@ -64,8 +98,9 @@ export function RotationRing({
       <svg
         viewBox={labels ? "-70 -30 540 460" : "28 28 344 344"}
         className="absolute inset-0 h-full w-full overflow-visible"
-        role="img"
-        aria-label={`${title}: ${n} members${done ? ", all rounds complete" : `, member ${current + 1} receives this round`}`}
+        role={decorative ? undefined : "img"}
+        aria-hidden={decorative || undefined}
+        aria-label={decorative ? undefined : `${title}: ${n} members${done ? ", all rounds complete" : `, member ${current + 1} receives this round`}`}
       >
         {/* tick marks */}
         {Array.from({ length: 72 }, (_, i) => {
@@ -119,6 +154,9 @@ export function RotationRing({
                   <circle cx={p.x} cy={p.y} r={nodeR + 5} fill="none" stroke="#D97757" strokeWidth="1" opacity="0.6" />
                 </>
               )}
+              {isMe && !labels && (
+                <circle cx={p.x} cy={p.y} r={nodeR + 4} fill="none" stroke="#1F1E1D" strokeWidth="1.4" strokeDasharray="2.5 2.5" />
+              )}
               <circle cx={p.x} cy={p.y} r={nodeR} fill={fill} stroke={stroke} strokeWidth={m.paid && !isCurrent && !m.received ? 2.2 : 1.4} />
               {nodeR >= 9 && (
                 <text
@@ -127,7 +165,7 @@ export function RotationRing({
                   textAnchor="middle"
                   dominantBaseline="central"
                   fill={text}
-                  style={{ font: `500 ${Math.round(nodeR * 0.78)}px var(--font-serif)` }}
+                  style={{ font: `500 ${Math.round(nodeR * 0.9)}px var(--font-serif)` }}
                 >
                   {i + 1}
                 </text>

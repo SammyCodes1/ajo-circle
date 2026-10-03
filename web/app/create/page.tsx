@@ -32,7 +32,7 @@ function SectionLabel({ n, title, hint }: { n: string; title: string; hint?: str
 }
 
 const inputCls =
-  "w-full rounded-lg border border-line-strong bg-white/70 px-3.5 py-2.5 text-ink placeholder:text-faint transition-[border-color,box-shadow] focus:border-clay focus:bg-white focus:shadow-[0_0_0_3px_rgb(201_100_66/0.15)] focus:outline-none";
+  "min-h-11 w-full rounded-lg border border-line-strong bg-white/70 px-3.5 py-2.5 text-ink placeholder:text-faint transition-[border-color,box-shadow] focus:border-clay focus:bg-white focus:shadow-[0_0_0_3px_rgb(201_100_66/0.15)] focus:outline-none";
 
 export default function CreatePage() {
   const w = useWallet();
@@ -149,7 +149,7 @@ export default function CreatePage() {
 
           <Card as="section">
             <SectionLabel n="ii." title="Round length" hint="How long members have to pay before the pot can be released." />
-            <div role="radiogroup" aria-label="Round length" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <div role="radiogroup" aria-label="Round length" className="grid grid-cols-2 gap-2 min-[400px]:grid-cols-3 sm:grid-cols-5">
               {PERIODS.map((p) => {
                 const on = period === p.secs;
                 return (
@@ -166,7 +166,7 @@ export default function CreatePage() {
                     }`}
                   >
                     <span className="block text-sm font-medium">{p.label}</span>
-                    <span className={`block text-[0.7rem] ${on ? "text-ivory/70" : "text-muted"}`}>
+                    <span className={`block text-xs ${on ? "text-ivory/70" : "text-muted"}`}>
                       {p.hint || "\u00a0"}
                     </span>
                   </button>
@@ -181,7 +181,7 @@ export default function CreatePage() {
               <button
                 type="button"
                 onClick={() => (bulk ? applyBulk() : openBulk())}
-                className="text-sm text-clay-deep underline-offset-4 hover:underline"
+                className="inline-flex min-h-11 items-center text-sm text-clay-deep underline-offset-4 hover:underline"
               >
                 {bulk ? "Apply list" : "Paste a list"}
               </button>
@@ -195,7 +195,7 @@ export default function CreatePage() {
                   onChange={(e) => setBulkText(e.target.value)}
                   placeholder={"GABC…\nGDEF…\nGHIJ…"}
                   aria-label="Member addresses, one per line"
-                  className={`${inputCls} font-mono text-xs leading-6`}
+                  className={`${inputCls} font-mono text-base leading-7 sm:text-xs sm:leading-6`}
                 />
                 <div className="mt-3 flex gap-2">
                   <Button type="button" variant="ink" onClick={applyBulk} className="!py-2">
@@ -213,7 +213,7 @@ export default function CreatePage() {
                   const dup = !!r.trim() && members.indexOf(r.trim()) !== members.lastIndexOf(r.trim());
                   return (
                     <li key={i} className="group">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:flex-nowrap">
                         <span className="font-numeral w-7 shrink-0 text-right text-lg text-muted">{i + 1}</span>
                         <input
                           value={r}
@@ -223,9 +223,9 @@ export default function CreatePage() {
                           autoComplete="off"
                           aria-label={`Member ${i + 1} address`}
                           aria-invalid={bad || dup}
-                          className={`${inputCls} min-w-0 font-mono text-[0.78rem] ${bad || dup ? "!border-rust/60" : ""}`}
+                          className={`${inputCls} min-w-0 flex-1 basis-[calc(100%-2.25rem)] font-mono text-base sm:basis-auto sm:text-[0.78rem] ${bad || dup ? "!border-rust/60" : ""}`}
                         />
-                        <div className="flex shrink-0 items-center">
+                        <div className="ml-auto flex shrink-0 items-center sm:ml-0">
                           <IconBtn label={`Move member ${i + 1} up`} onClick={() => move(i, -1)} disabled={i === 0}>
                             ↑
                           </IconBtn>
@@ -246,7 +246,7 @@ export default function CreatePage() {
               </ol>
             )}
             {!bulk && (
-              <div className="ml-9 mt-3 flex flex-wrap gap-2">
+              <div className="mt-4 flex flex-wrap gap-2 sm:ml-9">
                 <Button type="button" variant="secondary" className="!py-2" onClick={() => setRows((r) => [...r, ""])} disabled={rows.length >= 50}>
                   + Add member
                 </Button>
@@ -294,7 +294,7 @@ export default function CreatePage() {
         <aside className="space-y-5 lg:sticky lg:top-24 lg:self-start">
           <Card className="!p-5">
             <Eyebrow>Preview</Eyebrow>
-            <RotationRing members={preview} current={0} me={w.address} showLabels={members.length >= 2 && members.length <= 8} title="Preview" className="mt-2">
+            <RotationRing members={preview} current={0} me={w.address} showLabels={false} title="Preview" className="mt-2">
               <p className="font-numeral text-3xl leading-none text-ink">
                 {showSummary
                   ? formatAmount(contribution! * BigInt(members.length))
@@ -302,7 +302,7 @@ export default function CreatePage() {
                     ? formatAmount(contribution)
                     : "—"}
               </p>
-              <p className="mt-1 text-[0.7rem] leading-snug text-muted">
+              <p className="mt-1 text-xs leading-snug text-muted">
                 {showSummary ? `${config.tokenCode} pot / round` : `${config.tokenCode} each · add members`}
               </p>
             </RotationRing>
@@ -313,7 +313,7 @@ export default function CreatePage() {
                 ["Total", showSummary ? formatDuration(period * members.length) : "—"],
               ].map(([k, v]) => (
                 <div key={k} className="bg-ivory px-2 py-2.5">
-                  <dt className="text-[0.68rem] text-muted">{k}</dt>
+                  <dt className="text-xs text-muted">{k}</dt>
                   <dd className="font-numeral mt-0.5 text-base text-ink">{v}</dd>
                 </div>
               ))}
@@ -353,7 +353,7 @@ function IconBtn({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="grid h-9 w-8 place-items-center rounded-md text-base text-muted transition-colors hover:bg-sand hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
+      className="grid h-11 w-11 place-items-center rounded-lg text-lg text-muted transition-colors hover:bg-sand hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
     >
       {children}
     </button>

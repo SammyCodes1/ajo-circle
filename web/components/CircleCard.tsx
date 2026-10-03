@@ -30,7 +30,7 @@ export function CircleCard({ c, mine }: { c: Circle; mine: boolean }) {
       className="group block animate-rise rounded-xl border border-line bg-ivory p-5 transition-[border-color,transform,box-shadow] duration-300 ease-[var(--ease-calm)] hover:-translate-y-0.5 hover:border-line-strong hover:shadow-[0_10px_30px_-18px_rgb(31_30_29/0.35)] sm:p-6"
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
+        <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
         <div className="flex gap-1.5">
           {mine && <Pill tone="clay">You’re in</Pill>}
           {done ? (

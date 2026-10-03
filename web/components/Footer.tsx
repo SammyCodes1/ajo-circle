@@ -5,7 +5,7 @@ export function Footer() {
   return (
     <footer className="relative mt-auto overflow-hidden border-t border-line">
       <AdirePattern className="absolute inset-0" opacity={0.06} />
-      <div className="relative mx-auto flex max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-muted sm:flex-row sm:items-center sm:justify-between sm:px-8">
+      <div className="relative mx-auto flex max-w-6xl flex-col gap-4 px-4 pb-24 pt-8 text-sm text-muted md:pb-8 sm:flex-row sm:items-center sm:justify-between sm:px-8">
         <div className="flex items-center gap-3">
           <LogoMark className="h-6 w-6" />
           <p>

@@ -83,7 +83,7 @@ export default function CirclePage() {
         <div className="mt-5 text-left">
           <Alert tone="error">{loadError}</Alert>
         </div>
-        <Link href="/" className="mt-6 inline-block text-sm text-clay-deep underline underline-offset-4">
+        <Link href="/" className="mt-6 inline-flex min-h-11 items-center text-sm text-clay-deep underline underline-offset-4">
           ← Back to all circles
         </Link>
       </div>
@@ -158,15 +158,56 @@ export default function CirclePage() {
     received: i < circle.round,
   }));
 
+  const settled = (cls: string) => (
+        <Card className={cls}>
+          <h2 className="font-display text-xl text-ink">Settled rounds</h2>
+          {history.length === 0 ? (
+            <p className="mt-4 text-sm text-muted">No rounds settled yet. The first payout will appear here.</p>
+          ) : (
+            <ol className="relative mt-5 space-y-5 border-l border-line pl-6">
+              {history.map((r) => (
+                <li key={r.round} className="relative">
+                  <span
+                    aria-hidden
+                    className={`absolute -left-[1.85rem] top-1 h-3 w-3 rounded-full border-2 border-ivory ${
+                      r.defaulted.length ? "bg-rust" : "bg-sage"
+                    }`}
+                  />
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <p className="font-medium text-ink">Round {r.round + 1}</p>
+                    <p className="text-sm text-ink-soft">
+                      <span className="font-numeral text-base text-ink">{formatAmount(r.pot)}</span> {config.tokenCode} →{" "}
+                      <Address value={r.recipient} />
+                    </p>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <Pill tone="sage">{r.paid.length} paid</Pill>
+                    {r.defaulted.length > 0 ? (
+                      r.defaulted.map((d) => (
+                        <Pill key={d} tone="rust">
+                          defaulted · {shortAddr(d)}
+                        </Pill>
+                      ))
+                    ) : (
+                      <Pill tone="neutral">no defaults</Pill>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </Card>
+  );
+
   return (
     <div className="space-y-10">
       {/* ---------------------------------------------------- heading */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <Link href="/" className="text-sm text-muted transition-colors hover:text-ink">
+          <Link href="/" className="-ml-1 inline-flex min-h-11 items-center px-1 text-sm text-muted transition-colors hover:text-ink">
             ← All circles
           </Link>
-          <h1 className="font-display mt-3 text-[2.6rem] leading-none text-ink sm:text-[3.2rem]">Circle №{circle.id}</h1>
+          <h1 className="font-display mt-1 text-[2.6rem] leading-none text-ink sm:text-[3.2rem]">Circle №{circle.id}</h1>
           <p className="mt-3 text-[0.98rem] text-ink-soft">
             <span className="whitespace-nowrap">
               <span className="font-numeral text-lg text-ink">{formatAmount(circle.contribution)}</span> {config.tokenCode} per member
@@ -187,22 +228,22 @@ export default function CirclePage() {
       </div>
 
       {/* ---------------------------------------------------- ring + round */}
-      <div className="grid gap-6 lg:grid-cols-[1.05fr_1fr]">
-        <Card className="flex flex-col !p-4 sm:!p-6">
+      <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[1.05fr_1fr]">
+        <Card className="order-2 flex flex-col !p-4 sm:!p-6 lg:order-none">
           <div className="flex items-center justify-between px-1">
             <Eyebrow>Rotation</Eyebrow>
             <span className="text-xs text-muted">clockwise from the top</span>
           </div>
-          <RotationRing members={ringMembers} current={done ? -1 : circle.round} me={me} className="mt-2">
+          <RotationRing members={ringMembers} current={done ? -1 : circle.round} me={me} className="mt-2 max-w-[520px]">
             {done ? (
               <>
-                <p className="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-sage">Complete</p>
+                <p className="font-mono text-xs uppercase tracking-[0.16em] text-sage">Complete</p>
                 <p className="font-numeral mt-1 text-4xl leading-none text-ink sm:text-5xl">{n}/{n}</p>
                 <p className="mt-1.5 text-xs text-muted">pots paid out</p>
               </>
             ) : (
               <>
-                <p className="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-muted">
+                <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">
                   Round {circle.round + 1} of {n}
                 </p>
                 <p className="font-numeral mt-1 text-4xl leading-none text-ink sm:text-5xl">{formatAmount(circle.pot)}</p>
@@ -215,12 +256,15 @@ export default function CirclePage() {
           <RingLegend className="mt-auto justify-center border-t border-line px-1 pt-4" />
         </Card>
 
-        <div className="space-y-6">
+        <div className="contents lg:flex lg:flex-col lg:gap-6">
           {current ? (
-            <Card className="space-y-6">
+            <Card className="order-1 space-y-6 lg:order-none">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <Eyebrow>This round’s pot goes to</Eyebrow>
+                  <Eyebrow>
+                    <span className="sm:hidden">Pot goes to</span>
+                    <span className="hidden sm:inline">This round’s pot goes to</span>
+                  </Eyebrow>
                   <p className="mt-2 flex items-center gap-2 text-lg text-ink">
                     <span className="font-numeral grid h-8 w-8 shrink-0 place-items-center rounded-full bg-clay text-sm text-white">
                       {circle.round + 1}
@@ -303,58 +347,25 @@ export default function CirclePage() {
               {txErr && <Alert tone="error">{txErr}</Alert>}
             </Card>
           ) : (
-            <Card className="space-y-3">
+            <Card className="order-1 space-y-3 lg:order-none">
               <Eyebrow>Circle complete</Eyebrow>
               <p className="font-display text-2xl leading-snug text-ink">
                 Every member has taken their turn. {formatAmount(history.reduce((a, r) => a + BigInt(r.pot), BigInt(0)))}{" "}
                 {config.tokenCode} moved through this circle.
               </p>
-              <p className="text-sm text-muted">The full record stays on Stellar — see the history below.</p>
+              <p className="text-sm text-muted">The full record stays on Stellar — see the members and settled rounds.</p>
             </Card>
           )}
-          {isMember && !done && <AccountPanel need={circle.contribution} />}
-          <Card>
-            <h2 className="font-display text-xl text-ink">Settled rounds</h2>
-            {history.length === 0 ? (
-              <p className="mt-4 text-sm text-muted">No rounds settled yet. The first payout will appear here.</p>
-            ) : (
-              <ol className="relative mt-5 space-y-5 border-l border-line pl-6">
-                {history.map((r) => (
-                  <li key={r.round} className="relative">
-                    <span
-                      aria-hidden
-                      className={`absolute -left-[1.85rem] top-1 h-3 w-3 rounded-full border-2 border-ivory ${
-                        r.defaulted.length ? "bg-rust" : "bg-sage"
-                      }`}
-                    />
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                      <p className="font-medium text-ink">Round {r.round + 1}</p>
-                      <p className="text-sm text-ink-soft">
-                        <span className="font-numeral text-base text-ink">{formatAmount(r.pot)}</span> {config.tokenCode} →{" "}
-                        <Address value={r.recipient} />
-                      </p>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <Pill tone="sage">{r.paid.length} paid</Pill>
-                      {r.defaulted.length > 0 ? (
-                        r.defaulted.map((d) => (
-                          <Pill key={d} tone="rust">
-                            defaulted · {shortAddr(d)}
-                          </Pill>
-                        ))
-                      ) : (
-                        <Pill tone="neutral">no defaults</Pill>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </Card>
-          <div className="flex flex-wrap gap-x-5 gap-y-1 px-1 text-xs text-muted">
+          {isMember && !done && (
+            <div className="order-3 lg:order-none">
+              <AccountPanel need={circle.contribution} />
+            </div>
+          )}
+          {settled("hidden lg:block")}
+          <div className="order-4 flex flex-wrap items-center gap-x-5 px-1 text-xs text-muted lg:order-none">
             <span>
               Contract{" "}
-              <a className="font-mono underline decoration-line-strong underline-offset-2 hover:text-ink" href={explorer.contract(config.contractId)} target="_blank" rel="noreferrer">
+              <a className="inline-flex min-h-11 items-center font-mono underline decoration-line-strong underline-offset-2 hover:text-ink" href={explorer.contract(config.contractId)} target="_blank" rel="noreferrer">
                 {shortAddr(config.contractId, 5)}
               </a>
             </span>
@@ -367,7 +378,7 @@ export default function CirclePage() {
       </div>
 
       {/* ---------------------------------------------------- members + history */}
-      <div>
+      <div className="space-y-6">
         <Card className="!p-0">
           <div className="flex items-baseline justify-between px-5 pb-3 pt-5 sm:px-6">
             <h2 className="font-display text-xl text-ink">Members</h2>
@@ -376,7 +387,7 @@ export default function CirclePage() {
           <div className="hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[520px] text-sm">
               <thead>
-                <tr className="border-y border-line text-left text-[0.7rem] uppercase tracking-[0.12em] text-muted">
+                <tr className="border-y border-line text-left text-xs uppercase tracking-[0.12em] text-muted">
                   <th className="py-2.5 pl-5 font-medium sm:pl-6">#</th>
                   <th className="font-medium">Member</th>
                   <th className="font-medium">This round</th>
@@ -393,7 +404,7 @@ export default function CirclePage() {
                     <tr key={m} className={`border-b border-line/70 last:border-0 ${m === me ? "bg-clay-wash/40" : ""}`}>
                       <td className="font-numeral py-3 pl-5 text-base text-muted sm:pl-6">{i + 1}</td>
                       <td>
-                        <a className="text-ink hover:underline" href={explorer.account(m)} target="_blank" rel="noreferrer">
+                        <a className="inline-flex min-h-11 items-center text-ink hover:underline" href={explorer.account(m)} target="_blank" rel="noreferrer">
                           <Address value={m} chars={5} />
                         </a>
                         {m === me && <span className="ml-2 text-xs font-medium text-clay-deep">you</span>}
@@ -430,7 +441,7 @@ export default function CirclePage() {
                   <span className="font-numeral w-5 pt-0.5 text-lg leading-none text-muted">{i + 1}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <a className="text-ink" href={explorer.account(m)} target="_blank" rel="noreferrer">
+                      <a className="-my-2.5 inline-flex min-h-11 items-center text-ink" href={explorer.account(m)} target="_blank" rel="noreferrer">
                         <Address value={m} chars={5} />
                         {m === me && <span className="ml-2 text-xs font-medium text-clay-deep">you</span>}
                       </a>
@@ -453,7 +464,7 @@ export default function CirclePage() {
             })}
           </ul>
         </Card>
-
+        {settled("lg:hidden")}
       </div>
     </div>
   );

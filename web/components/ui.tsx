@@ -12,13 +12,13 @@ export function Card({
   as?: "div" | "section" | "article";
 }) {
   return (
-    <Tag className={`rounded-xl border border-line bg-ivory p-5 sm:p-6 ${className}`}>{children}</Tag>
+    <Tag className={`rounded-xl border border-line bg-ivory p-4 shadow-[var(--shadow-card)] min-[360px]:p-5 sm:p-6 ${className}`}>{children}</Tag>
   );
 }
 
 type Variant = "primary" | "secondary" | "ghost" | "ink";
 const base =
-  "inline-flex select-none items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-[0.9rem] font-medium tracking-[-0.005em] transition-[background-color,color,border-color,box-shadow,transform] duration-200 ease-[var(--ease-calm)] active:translate-y-px disabled:cursor-not-allowed disabled:active:translate-y-0";
+  "inline-flex min-h-11 select-none items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-[0.9rem] font-medium tracking-[-0.005em] transition-[background-color,color,border-color,box-shadow,transform] duration-200 ease-[var(--ease-calm)] active:translate-y-px disabled:cursor-not-allowed disabled:active:translate-y-0";
 const variants: Record<Variant, string> = {
   primary:
     "bg-clay-strong text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.18)] hover:bg-clay-deep disabled:bg-sand disabled:text-muted disabled:shadow-none",
@@ -154,7 +154,7 @@ export function Pill({
 
 export function Eyebrow({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
-    <p className={`font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted ${className}`}>
+    <p className={`font-mono text-xs uppercase tracking-[0.16em] text-muted ${className}`}>
       {children}
     </p>
   );
@@ -176,7 +176,7 @@ export function Spinner({ label = "Loading…" }: { label?: string }) {
 export function Address({ value, chars = 4, className = "" }: { value: string; chars?: number; className?: string }) {
   const short = value.length > chars * 2 + 3 ? `${value.slice(0, chars)}…${value.slice(-chars)}` : value;
   return (
-    <span title={value} className={`font-mono text-[0.82em] tracking-tight ${className}`}>
+    <span title={value} className={`font-mono text-[max(12px,0.82em)] tracking-tight ${className}`}>
       {short}
     </span>
   );

@@ -59,7 +59,7 @@ export function AccountPanel({ need }: { need?: bigint }) {
         <h3 className="font-display text-lg text-ink">Your wallet</h3>
         <button
           onClick={refresh}
-          className="text-xs text-muted underline-offset-2 transition-colors hover:text-ink hover:underline"
+          className="-my-2 inline-flex min-h-11 items-center px-1 text-xs text-muted underline-offset-2 transition-colors hover:text-ink hover:underline"
         >
           Refresh
         </button>
@@ -139,12 +139,12 @@ export function AccountPanel({ need }: { need?: bigint }) {
         <Alert tone="warn" title="Low balance">
           You have {formatAmount(status!.tokenBalance)} {config.tokenCode} but need {formatAmount(need!)}. Ask the
           demo operator to run{" "}
-          <code className="break-all font-mono text-[0.72rem]">./scripts/fund-test-usdc.sh {w.address}</code>
+          <code className="break-all font-mono text-xs">./scripts/fund-test-usdc.sh {w.address}</code>
         </Alert>
       )}
       {status?.hasTrustline && (
         <button
-          className="text-xs text-muted underline-offset-2 transition-colors hover:text-ink hover:underline"
+          className="inline-flex min-h-11 items-center text-xs text-muted underline-offset-2 transition-colors hover:text-ink hover:underline"
           onClick={() =>
             run("add", async () => {
               const r = await addToken({

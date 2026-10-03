@@ -59,7 +59,7 @@ export default function Home() {
   const mine = (c: Circle) => !!address && (c.members.includes(address) || c.admin === address);
 
   return (
-    <div className="space-y-24 sm:space-y-28">
+    <div className="space-y-16 sm:space-y-24 lg:space-y-28">
       {/* ---------------------------------------------------------- hero */}
       <section className="grid items-center gap-10 lg:grid-cols-[1.08fr_1fr] lg:gap-14">
         <div className="animate-rise">
@@ -78,7 +78,7 @@ export default function Home() {
               Browse circles
             </LinkButton>
             <a
-              className="ml-1 text-sm text-muted underline decoration-line-strong underline-offset-4 transition-colors hover:text-ink"
+              className="ml-1 inline-flex min-h-11 items-center text-sm text-muted underline decoration-line-strong underline-offset-4 transition-colors hover:text-ink"
               href={explorer.contract(config.contractId)}
               target="_blank"
               rel="noreferrer"
@@ -94,8 +94,8 @@ export default function Home() {
             <div className="absolute inset-0 bg-[radial-gradient(closest-side,#f5f1ea_55%,transparent)]" />
           </div>
           <div className="relative px-4 py-6 sm:px-8 sm:py-8">
-            <RotationRing members={DEMO} current={2} showLabels={false} title="Example circle" className="max-w-[400px]">
-              <p className="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-muted">Round 3 of 6</p>
+            <RotationRing members={DEMO} current={2} showLabels={false} title="Example circle" className="max-w-[400px]" decorative>
+              <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Round 3 of 6</p>
               <p className="font-numeral mt-1 text-[2.4rem] leading-none text-ink sm:text-5xl">60</p>
               <p className="mt-1 text-xs text-muted">USDC pot → member 3</p>
             </RotationRing>
@@ -112,7 +112,7 @@ export default function Home() {
           </div>
           <button
             onClick={load}
-            className="text-sm text-muted underline-offset-4 transition-colors hover:text-ink hover:underline"
+            className="inline-flex min-h-11 items-center px-1 text-sm text-muted underline-offset-4 transition-colors hover:text-ink hover:underline"
           >
             Refresh
           </button>

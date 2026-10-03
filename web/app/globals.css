@@ -47,6 +47,12 @@
 
   --ease-calm: cubic-bezier(0.22, 1, 0.36, 1);
 
+  /* elevation scale: paper (0) → card (1, hairline) → raised/sticky (2) → overlay (3) */
+  --shadow-card: 0 0 0 0 transparent;
+  --shadow-hover: 0 10px 30px -18px rgb(31 30 29 / 0.35);
+  --shadow-raised: 0 1px 0 rgb(31 30 29 / 0.04), 0 8px 24px -18px rgb(31 30 29 / 0.28);
+  --shadow-overlay: 0 18px 50px -20px rgb(31 30 29 / 0.45), 0 0 0 1px rgb(31 30 29 / 0.06);
+
   --animate-shimmer: shimmer 1.6s ease-in-out infinite;
   --animate-rise: rise 0.5s var(--ease-calm) both;
   --animate-spin-slow: spin 60s linear infinite;
@@ -63,6 +69,12 @@
 
 :root {
   color-scheme: light;
+  /* z-index scale */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-sticky: 30;
+  --z-overlay: 50;
+  --z-toast: 60;
 }
 
 html {
