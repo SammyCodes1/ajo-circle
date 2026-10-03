@@ -1308,3 +1308,75 @@ fn settle_still_possible_until_unwind() {
     claim_all(&s, id);
     assert_eq!(s.token.balance(&s.contract), 0);
 }
+
+// ------------------------------------------------------ C7: budget check
+
+/// Soroban per-transaction limits (mainnet/testnet, protocol 23+).
+const TX_MAX_CPU: u64 = 100_000_000;
+const TX_MAX_MEM: u64 = 41_943_040;
+
+/// n=20, nobody posts, everyone defaults except one member each round.
+/// Returns (worst cpu, its mem, round).
+fn budget_run(s: &Setup) -> (u64, u64, u32) {
+    let n = s.members.len();
+    let id = start(s, &std::vec![0; n as usize]);
+    let mut worst = (0u64, 0u64, 0u32);
+    for r in 0..n {
+        let payer = (r + 1) % n;
+        s.client.contribute(&id, &mem(s, payer));
+        set_time(s, s.client.get_circle(&id).round_start + PERIOD);
+        // measure exactly one settle under the default (limited) budget
+        s.env.cost_estimate().budget().reset_default();
+        s.client.settle(&id);
+        let cpu = s.env.cost_estimate().budget().cpu_instruction_cost();
+        let mem_b = s.env.cost_estimate().budget().memory_bytes_cost();
+        if cpu > worst.0 {
+            worst = (cpu, mem_b, r);
+        }
+        assert!(cpu <= TX_MAX_CPU, "round {r}: cpu {cpu}");
+        assert!(mem_b <= TX_MAX_MEM, "round {r}: mem {mem_b}");
+    }
+    s.env.cost_estimate().budget().reset_unlimited();
+    check_invariants(s, &[id]);
+    claim_all(s, id);
+    assert_eq!(s.token.balance(&s.contract), 0);
+    worst
+}
+
+fn print_budget(label: &str, w: (u64, u64, u32)) {
+    std::println!(
+        "{label}: worst settle at round {}: cpu={} insns ({}% of {}), mem={} bytes ({}% of {})",
+        w.2,
+        w.0,
+        w.0 * 100 / TX_MAX_CPU,
+        TX_MAX_CPU,
+        w.1,
+        w.1 * 100 / TX_MAX_MEM,
+        TX_MAX_MEM
+    );
+}
+
+#[test]
+fn budget_20_members_worst_case() {
+    let s = setup(MAX_MEMBERS, C * i128::from(2 * MAX_MEMBERS));
+    let w = budget_run(&s);
+    print_budget("budget_20_members_worst_case (native)", w);
+}
+
+/// Same scenario against the compiled wasm, which meters guest instructions
+/// too (native test runs only meter host calls). Runs when `AJO_WASM`
+/// points at a built `ajo.wasm`; otherwise it prints that it was skipped.
+#[test]
+fn budget_20_members_worst_case_wasm() {
+    let Ok(path) = std::env::var("AJO_WASM") else {
+        std::println!("budget_20_members_worst_case_wasm: skipped (set AJO_WASM)");
+        return;
+    };
+    let wasm = std::fs::read(&path).expect("read AJO_WASM");
+    let mut s = setup(MAX_MEMBERS, C * i128::from(2 * MAX_MEMBERS));
+    let wasm_id = s.env.register(wasm.as_slice(), (s.token.address.clone(),));
+    s.client = AjoContractClient::new(&s.env, &wasm_id);
+    s.contract = wasm_id;
+    let w = budget_run(&s);
+    print_budget("budget_20_members_worst_case (wasm)", w);
+}
