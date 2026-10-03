@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { Circle } from "@/lib/ajo";
 import { config } from "@/lib/config";
+import { isKnownToken } from "@/lib/token";
 import { formatAmount, formatDuration } from "@/lib/format";
 import { Pill, Skeleton } from "./ui";
 import { CountUp } from "./motion";
@@ -33,6 +34,7 @@ export function CircleCard({ c, mine }: { c: Circle; mine: boolean }) {
       <div className="flex items-center justify-between gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
         <div className="flex gap-1.5">
+          {!isKnownToken(c.token) && <Pill tone="rust">Unknown token</Pill>}
           {mine && <Pill tone="clay">You’re in</Pill>}
           {done ? (
             <Pill tone="sage" dot>

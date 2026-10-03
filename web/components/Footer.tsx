@@ -1,5 +1,7 @@
 import { AdirePattern, LogoMark } from "./Brand";
 import { config, explorer } from "@/lib/config";
+import { shortAddr } from "@/lib/format";
+import { TokenLabel } from "./TokenLabel";
 
 export function Footer() {
   return (
@@ -13,10 +15,10 @@ export function Footer() {
           </p>
         </div>
         <p className="max-w-md text-[0.8rem] leading-relaxed">
-          Runs on Stellar <b className="font-medium text-ink-soft">Testnet</b>. The {config.tokenCode} here is a
-          test token with no value.{" "}
+          Runs on Stellar <b className="font-medium text-ink-soft">Testnet</b>. The token is this project&apos;s own
+          test {config.tokenCode} (<TokenLabel />), not Circle&apos;s USDC, and has no value.{" "}
           <a className="underline decoration-line-strong underline-offset-2 hover:text-ink" href={explorer.contract(config.contractId)} target="_blank" rel="noreferrer">
-            Contract ↗
+            Contract {config.contractId ? shortAddr(config.contractId) : ""} ↗
           </a>
         </p>
       </div>

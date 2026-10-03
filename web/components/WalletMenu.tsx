@@ -134,7 +134,7 @@ export function WalletMenu() {
 
 function LocalItems({ close }: { close: () => void }) {
   const w = useWallet();
-  const [ask, setAsk] = useState(false);
+  const [ask, setAsk] = useState(true);
   useEffect(() => setAsk(confirmBeforeSigning()), []);
   return (
     <div className="border-b border-line py-1">

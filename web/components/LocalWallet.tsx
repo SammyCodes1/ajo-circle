@@ -359,12 +359,24 @@ function SignSheet() {
     <Dialog title="Sign with your testnet wallet?" onClose={() => req.reject(new Error("You cancelled signing."))} labelledBy="lw-sign">
       <ul className="mt-3 space-y-2">
         {req.lines.map((l, i) => (
-          <li key={i} className="rounded-lg border border-line bg-white p-2.5">
-            <p className="text-sm font-medium text-ink">{l.label}</p>
+          <li
+            key={i}
+            style={{ marginLeft: `${Math.min(l.depth ?? 0, 3) * 0.75}rem` }}
+            className={`rounded-lg border p-2.5 ${l.warn ? "border-clay-strong bg-clay/10" : "border-line bg-white"}`}
+          >
+            <p className="text-sm font-medium text-ink">
+              {l.warn && <span className="mr-1 font-semibold text-clay-strong">Warning:</span>}
+              {l.label}
+            </p>
             {l.detail && <p className="mt-0.5 break-all font-mono text-[11px] text-muted">{l.detail}</p>}
           </li>
         ))}
       </ul>
+      {req.lines.some((l) => l.warn) && (
+        <p className="mt-2 text-xs font-medium text-clay-strong">
+          This transaction touches a contract that isn&apos;t the Ajo contract or the configured test USDC. Don&apos;t sign unless you expected it.
+        </p>
+      )}
       <p className="mt-2 text-xs text-muted">Network fee up to {req.fee} XLM · Stellar Testnet</p>
       <div className="mt-4 flex gap-2">
         <Button variant="secondary" className="flex-1" onClick={() => req.reject(new Error("You cancelled signing."))}>

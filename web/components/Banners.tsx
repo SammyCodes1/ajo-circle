@@ -2,6 +2,7 @@
 import { useWallet } from "./WalletProvider";
 import { Alert } from "./ui";
 import { missingConfig } from "@/lib/config";
+import { useTokenInfo } from "@/lib/token";
 
 /** Status banners live in normal page flow, directly under the sticky header. */
 export function Banners() {
@@ -10,13 +11,22 @@ export function Banners() {
   const readOnly = w.ready && !w.address && !w.needsWalletConnect;
   const wcNote = !w.address && w.needsWalletConnect;
   const showError = w.error && !(wcNote && /WalletConnect/.test(w.error));
-  if (!(missing.length > 0 || readOnly || wcNote || w.wrongNetwork || showError)) return null;
+  const token = useTokenInfo();
+  const badToken = token.state === "mismatch";
+  if (!(missing.length > 0 || readOnly || wcNote || w.wrongNetwork || showError || badToken)) return null;
   return (
     <div className="mx-auto w-full max-w-6xl space-y-2 px-4 pt-4 sm:px-8">
       {missing.length > 0 && (
         <Alert tone="error" title="App is not configured">
           Set {missing.join(", ")} in <code className="font-mono text-xs">web/.env.local</code> (see .env.example)
           and restart.
+        </Alert>
+      )}
+      {badToken && (
+        <Alert tone="error" title="This deployment's token is not the configured USDC">
+          The contract pins <code className="break-all font-mono text-xs">{token.pinned}</code>, but this site is
+          configured for <code className="break-all font-mono text-xs">{token.name ?? "the project's test USDC"}</code>.
+          Don&apos;t send funds until the contract ID or token setting is fixed.
         </Alert>
       )}
       {readOnly && (

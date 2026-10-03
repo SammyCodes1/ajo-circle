@@ -5,6 +5,7 @@
 // It is never sent to any server (the /api/faucet route only ever receives the public key).
 // Everything here refuses to sign for any network other than Stellar Testnet.
 import {
+  Address,
   Asset,
   BASE_FEE,
   Horizon,
@@ -117,11 +118,12 @@ export function markLocalBackedUp() {
   if (s) write({ ...s, backedUp: true });
 }
 
+/** On by default: only an explicit "0" (the user switched it off) skips the sheet. */
 export function confirmBeforeSigning(): boolean {
   try {
-    return window.localStorage.getItem(CONFIRM_KEY) === "1";
+    return window.localStorage.getItem(CONFIRM_KEY) !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 export function setConfirmBeforeSigning(on: boolean) {
@@ -130,8 +132,16 @@ export function setConfirmBeforeSigning(on: boolean) {
 }
 
 // ---------------------------------------------------------------- signing confirmation
+export interface SignLine {
+  label: string;
+  detail?: string;
+  /** Nesting depth for authorization sub-invocations (0 = top level). */
+  depth?: number;
+  /** A contract other than the Ajo contract or the pinned token. */
+  warn?: boolean;
+}
 export interface SignRequest {
-  lines: { label: string; detail?: string }[];
+  lines: SignLine[];
   fee: string;
   resolve: () => void;
   reject: (e: Error) => void;
@@ -149,9 +159,16 @@ function setSign(r: SignRequest | null) {
 }
 
 const FN_LABEL: Record<string, string> = {
-  contribute: "Contribute to a circle",
-  payout: "Release this round's pot",
   create_circle: "Create a savings circle",
+  accept: "Accept your slot in a circle",
+  post_collateral: "Post collateral",
+  contribute: "Contribute to a circle",
+  settle: "Settle this round",
+  payout: "Settle this round",
+  claim: "Claim your funds",
+  cancel: "Cancel a circle that never started",
+  unwind: "Unwind a stalled circle",
+  transfer: "Move tokens",
 };
 
 function short(v: unknown): string {
@@ -159,37 +176,80 @@ function short(v: unknown): string {
   return s && s.length > 60 ? `${s.slice(0, 57)}…` : s ?? "";
 }
 
-/** Human summary of what a transaction does (for the optional confirm sheet). */
-export function describeTx(tx: Transaction | FeeBumpTransaction): SignRequest["lines"] {
+/** i128 amounts shown with all 7 token decimals. */
+function fmt7(v: bigint): string {
+  const neg = v < BigInt(0);
+  const a = neg ? -v : v;
+  const unit = BigInt(10_000_000);
+  return `${neg ? "-" : ""}${(a / unit).toString()}.${(a % unit).toString().padStart(7, "0")}`;
+}
+
+function argText(a: xdr.ScVal): string {
+  try {
+    if (a.type === "scvI128") return fmt7(scValToNative(a) as bigint);
+    return short(scValToNative(a));
+  } catch {
+    return "…";
+  }
+}
+
+function contractName(id: string): { name: string; known: boolean } {
+  if (id === config.contractId) return { name: "Ajo contract", known: true };
+  if (id === config.tokenId) return { name: `${config.tokenCode} token (project test asset)`, known: true };
+  return { name: `UNKNOWN contract ${short(id)}`, known: false };
+}
+
+function callLine(contract: string, fnName: string, args: xdr.ScVal[], depth: number): SignLine {
+  const c = contractName(contract);
+  const label = `${FN_LABEL[fnName] ?? `Call ${fnName}`}${depth > 0 || !c.known ? ` · ${c.name}` : ""}`;
+  return { label, detail: `${fnName}(${args.map(argText).join(", ")})`, depth, warn: !c.known };
+}
+
+/** Every authorization this transaction asks for, as a tree (root + sub-invocations). */
+function authLines(auth: xdr.SorobanAuthorizationEntry[] | undefined): SignLine[] {
+  const out: SignLine[] = [];
+  const walk = (inv: xdr.SorobanAuthorizedInvocation, depth: number) => {
+    const f = inv.function;
+    if (f.type === "sorobanAuthorizedFunctionTypeContractFn") {
+      const ic = f.contractFn;
+      const id = Address.fromScAddress(ic.contractAddress).toString();
+      out.push(callLine(id, ic.functionName.toString(), ic.args, depth));
+    } else {
+      out.push({ label: "Create a contract", depth, warn: true });
+    }
+    inv.subInvocations.forEach((sub) => walk(sub, depth + 1));
+  };
+  for (const e of auth ?? []) {
+    out.push({ label: "You authorize:", depth: 0 });
+    walk(e.rootInvocation, 1);
+  }
+  return out;
+}
+
+/** Human summary of what a transaction does (for the confirm sheet). */
+export function describeTx(tx: Transaction | FeeBumpTransaction): SignLine[] {
   const inner = "innerTransaction" in tx ? tx.innerTransaction : tx;
-  return inner.operations.map((op) => {
+  return inner.operations.flatMap((op): SignLine[] => {
     if (op.type === "changeTrust") {
       const line = (op as Operation.ChangeTrust).line;
-      return { label: `Add a trustline`, detail: line instanceof Asset ? `${line.getCode()} · ${short(line.getIssuer())}` : undefined };
+      return [{ label: `Add a trustline`, detail: line instanceof Asset ? `${line.getCode()} · ${short(line.getIssuer())}` : undefined }];
     }
     if (op.type === "invokeHostFunction") {
-      const fn = (op as Operation.InvokeHostFunction).func;
+      const o = op as Operation.InvokeHostFunction;
       try {
-        const ic = (fn as unknown as { invokeContract?: { functionName: { toString(): string }; args: xdr.ScVal[] } }).invokeContract;
-        if (!ic) return { label: "Smart-contract call" };
-        const name = ic.functionName.toString();
-        const args = ic.args.map((a: xdr.ScVal) => {
-          try {
-            return short(scValToNative(a));
-          } catch {
-            return "…";
-          }
-        });
-        return { label: FN_LABEL[name] ?? `Call ${name}`, detail: `${name}(${args.join(", ")})` };
+        if (o.func.type !== "hostFunctionTypeInvokeContract") return [{ label: "Smart-contract call", warn: true }];
+        const ic = o.func.invokeContract;
+        const id = Address.fromScAddress(ic.contractAddress).toString();
+        return [callLine(id, ic.functionName.toString(), ic.args, 0), ...authLines(o.auth)];
       } catch {
-        return { label: "Smart-contract call" };
+        return [{ label: "Smart-contract call", warn: true }];
       }
     }
     if (op.type === "payment") {
       const p = op as Operation.Payment;
-      return { label: `Send ${p.amount} ${p.asset.isNative() ? "XLM" : p.asset.getCode()}`, detail: `to ${short(p.destination)}` };
+      return [{ label: `Send ${p.amount} ${p.asset.isNative() ? "XLM" : p.asset.getCode()}`, detail: `to ${short(p.destination)}` }];
     }
-    return { label: op.type };
+    return [{ label: op.type }];
   });
 }
 
@@ -200,8 +260,8 @@ function keypair(): Keypair {
 }
 
 /**
- * Sign a transaction XDR with the browser wallet. Testnet only; asks first when the user turned
- * on "Ask before signing". Returns the signed XDR.
+ * Sign a transaction XDR with the browser wallet. Testnet only; shows the confirm sheet unless
+ * the user switched "Ask before signing" off (it is on by default). Returns the signed XDR.
  */
 export async function localSignXdr(txXdr: string, opts?: { networkPassphrase?: string; address?: string; skipConfirm?: boolean }) {
   const passphrase = opts?.networkPassphrase ?? config.networkPassphrase;
