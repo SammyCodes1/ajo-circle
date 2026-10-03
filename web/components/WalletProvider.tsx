@@ -6,6 +6,7 @@ import {
   kitError,
   loadWalletKit,
   WALLET_NAMES,
+  waitForWalletConnect,
   walletBrowser,
   walletConnectProjectId,
   type WalletBrowser,
@@ -61,7 +62,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   // Detect wallet in-app browsers on the client (the marker is injected before page scripts run).
   useEffect(() => {
-    setInAppBrowser(walletBrowser());
+    const b = walletBrowser();
+    setInAppBrowser(b);
+    // Inside a wallet browser the user is here to connect: start WalletConnect's relay
+    // handshake now so the first tap pairs immediately.
+    if (b && walletConnectProjectId) waitForWalletConnect().catch(() => {});
   }, []);
 
   /** Ask the wallet which network it is on. Most wallets (all but Freighter) don't say: degrade to null. */
@@ -132,6 +137,16 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     try {
       const kit = await loadWalletKit();
       kitRef.current = kit;
+      // WalletConnect must be ready before the picker snapshots availability,
+      // otherwise its entry links to walletconnect.com instead of connecting.
+      if (walletConnectProjectId) {
+        const ok = await waitForWalletConnect();
+        if (!ok && inFreighterMobile()) {
+          throw new Error(
+            "WalletConnect couldn't start. Check the connection, and that this site's domain is allowed in the Reown project.",
+          );
+        }
+      }
       const { address: a } = await kit.authModal();
       setAddress(a);
       setWalletId(selectedId(kit));
