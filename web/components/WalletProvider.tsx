@@ -13,8 +13,8 @@ import {
   type WalletBrowser,
   type WalletKit,
 } from "@/lib/walletKit";
-import { beginWcFlow, CANCELLED, dismissWcSheet, endWcFlow, setWcDebug, testnetSession, waitSignClient, withDeadline } from "@/lib/wcSession";
-import { WalletDebugPanel, WcConnectSheet } from "./WcConnectSheet";
+import { beginWcFlow, CANCELLED, dismissWcSheet, endWcFlow, testnetSession, waitSignClient, withDeadline } from "@/lib/wcSession";
+import { WcConnectSheet } from "./WcConnectSheet";
 import { LocalWalletLayer } from "./LocalWallet";
 import {
   consumeFreshLocalWallet,
@@ -92,20 +92,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const b = walletBrowser();
     setInAppBrowser(b);
-    setWcDebug(
-      {
-        inApp: b ? `${b.provider}/${b.platform} v${b.version ?? "?"}` : "no",
-        marker: JSON.stringify((window as unknown as { stellar?: unknown }).stellar ?? null),
-        ua: navigator.userAgent,
-        projectId: !!walletConnectProjectId,
-      },
-      "page loaded",
-    );
     // Inside a wallet browser the user is here to connect: start WalletConnect's relay
     // handshake now so the first tap pairs immediately.
     // Mobile browsers load it too, so the picker usually has the WalletConnect entry ready.
     if (walletConnectProjectId && (b || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent))) {
-      loadWalletKit().catch((e) => setWcDebug({ initError: kitError(e).message }, "kit prewarm failed"));
+      loadWalletKit().catch(() => {});
     }
   }, []);
 
@@ -370,7 +361,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     <WalletContext.Provider value={value}>
       {children}
       <WcConnectSheet />
-      <WalletDebugPanel />
       <LocalWalletLayer />
     </WalletContext.Provider>
   );

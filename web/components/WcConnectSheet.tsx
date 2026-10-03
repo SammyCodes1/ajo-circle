@@ -5,14 +5,10 @@ import { LOCAL_WALLET_SUPPORTED } from "@/lib/localWallet";
 import {
   dismissWcSheet,
   retryHandoff,
-  subscribeWcDebug,
   subscribeWcPending,
-  wcDebugSnapshot,
   wcPendingSnapshot,
   WC_APPROVAL_TIMEOUT_MS,
 } from "@/lib/wcSession";
-
-const noop = () => () => {};
 
 /**
  * WalletConnect progress sheet. In Freighter's in-app browser it appears the moment Connect is
@@ -152,49 +148,6 @@ export function WcConnectSheet() {
             Nothing showed up? In Freighter tap the scan (QR) button, choose to enter the link manually and paste it.
           </p>
         )}
-      </div>
-    </div>
-  );
-}
-
-/** ?debug=1 → small on-screen WalletConnect diagnostics (sticks for the tab via sessionStorage). */
-export function WalletDebugPanel() {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    try {
-      const q = new URLSearchParams(window.location.search).get("debug");
-      if (q === "1") sessionStorage.setItem("ajo:debug", "1");
-      if (q === "0") sessionStorage.removeItem("ajo:debug");
-      setOn(sessionStorage.getItem("ajo:debug") === "1");
-    } catch {}
-  }, []);
-  const d = useSyncExternalStore(on ? subscribeWcDebug : noop, wcDebugSnapshot, wcDebugSnapshot);
-  if (!on) return null;
-  const row = (k: string, v: React.ReactNode) => (
-    <div className="flex gap-2">
-      <span className="w-20 shrink-0 text-white/60">{k}</span>
-      <span className="min-w-0 break-all">{v}</span>
-    </div>
-  );
-  return (
-    <div className="fixed left-2 top-16 z-[70] max-h-[60vh] w-[min(22rem,calc(100vw-1rem))] overflow-auto rounded-lg bg-black/85 p-2.5 font-mono text-[10.5px] leading-snug text-white shadow-lg">
-      <div className="mb-1 font-bold">WalletConnect debug (?debug=0 hides)</div>
-      {row("in-app", d.inApp)}
-      {row("marker", d.marker)}
-      {row("UA Fm/", /FreighterMobile\/[\w.]+/.exec(d.ua)?.[0] ?? "no")}
-      {row("projectId", d.projectId ? "set" : "MISSING")}
-      {row("WC ready", d.wcReady ? "yes" : "no")}
-      {row("relay", d.relay)}
-      {row("WC init", d.initError ?? "—")}
-      {row("URI", d.uri ? `${d.uri.slice(0, 28)}…` : "—")}
-      {row("handoff", d.handoff ?? "—")}
-      {row("session", d.session)}
-      {row("address", d.address ? `${d.address.slice(0, 6)}…${d.address.slice(-4)}` : "—")}
-      {row("error", d.error ?? "—")}
-      <div className="mt-1 border-t border-white/20 pt-1 text-white/80">
-        {d.log.map((l, i) => (
-          <div key={i}>{l}</div>
-        ))}
       </div>
     </div>
   );

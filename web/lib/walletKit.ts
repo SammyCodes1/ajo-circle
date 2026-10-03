@@ -6,7 +6,7 @@ import type { StellarWalletsKit as Kit } from "@creit.tech/stellar-wallets-kit/s
 import type { ModuleInterface, Networks, SwkAppTheme } from "@creit.tech/stellar-wallets-kit/types";
 import { config } from "./config";
 import { LOCAL_WALLET_NAME, LOCAL_WALLET_SUPPORTED, LocalWalletModule } from "./localWallet";
-import { attachWc, setWcDebug, watchRelay, type WcModuleLike } from "./wcSession";
+import { attachWc, watchRelay, type WcModuleLike } from "./wcSession";
 
 export type WalletKit = typeof Kit;
 
@@ -98,7 +98,6 @@ export async function preparePicker(kit: WalletKit, waitMs = 2500): Promise<bool
     kit.init({ ...kitInitParams, modules: ready && wcModule ? [...baseModules, wcModule] : baseModules });
     wcInPicker = ready;
   }
-  setWcDebug(ready ? { wcReady: true } : {}, ready ? "picker with WalletConnect" : "picker without WalletConnect (not ready yet)");
   return ready;
 }
 
@@ -116,15 +115,6 @@ export function loadWalletKit(): Promise<WalletKit> {
     ]);
     const inApp = walletBrowser();
     watchRelay();
-    setWcDebug(
-      {
-        inApp: inApp ? `${inApp.provider}/${inApp.platform} v${inApp.version ?? "?"}` : "no",
-        marker: JSON.stringify((window as unknown as { stellar?: unknown }).stellar ?? null),
-        ua: navigator.userAgent,
-        projectId: !!walletConnectProjectId,
-      },
-      "kit loading",
-    );
     // Order = order in the picker (installed wallets first, then the rest).
     // Inside a wallet's in-app browser, browser extensions can never be installed, so only
     // offer wallets that work there (WalletConnect wrapper, Albedo web, xBull PWA) and

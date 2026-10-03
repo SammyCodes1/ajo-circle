@@ -11,7 +11,6 @@
 //    the AppKit wallet list.
 // Here we propose stellar:testnet + stellar:pubnet as optional chains, so Freighter always
 // answers; if it answers on Mainnet we drop that session and say exactly what to change.
-// Everything we do is mirrored into a small debug store (shown with ?debug=1).
 
 export const WC_TESTNET = "stellar:testnet";
 export const WC_PUBNET = "stellar:pubnet";
@@ -54,55 +53,8 @@ export interface WcModuleLike {
   disconnect?: () => Promise<void>;
 }
 
-// ---------- debug / progress store ----------
-export interface WcDebug {
-  inApp: string; // detection result
-  marker: string; // raw window.stellar
-  ua: string;
-  projectId: boolean;
-  wcReady: boolean;
-  uri: string | null;
-  handoff: string | null;
-  session: string;
-  address: string | null;
-  error: string | null;
-  relay: string;
-  initError: string | null;
-  log: string[];
-}
-const dbg: WcDebug = {
-  inApp: "?",
-  marker: "?",
-  ua: "",
-  projectId: false,
-  wcReady: false,
-  uri: null,
-  handoff: null,
-  session: "idle",
-  address: null,
-  error: null,
-  relay: "—",
-  initError: null,
-  log: [],
-};
-const listeners = new Set<() => void>();
-let snapshot: WcDebug = { ...dbg };
-export function wcDebugSnapshot(): WcDebug {
-  return snapshot;
-}
-export function subscribeWcDebug(fn: () => void): () => void {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-export function setWcDebug(p: Partial<WcDebug>, note?: string) {
-  Object.assign(dbg, p);
-  if (note) {
-    const t = new Date().toTimeString().slice(0, 8);
-    dbg.log = [...dbg.log.slice(-11), `${t} ${note}`];
-  }
-  snapshot = { ...dbg };
-  listeners.forEach((f) => f());
-}
+/** Last WalletConnect error seen (used to explain relay failures in error messages). */
+let wcInitError: string | null = null;
 
 // ---------- connection flow (drives the progress sheet) ----------
 export type WcPhase = "preparing" | "waiting" | "error";
@@ -160,7 +112,6 @@ export function beginWcFlow(mode: "freighter" | "modal"): Flow {
   const f: Flow = { mode, deadline: Date.now() + WC_PREP_BUDGET_MS, cancelled, cancel, done: false };
   flow = f;
   setPending({ mode, phase: "preparing", startedAt: Date.now(), cancel: () => f.cancel() });
-  setWcDebug({ error: null, uri: null, handoff: null, session: "preparing" }, `flow start (${mode})`);
   return f;
 }
 
@@ -198,30 +149,26 @@ export function watchRelay() {
       const u = String(url);
       if (!/relay\.walletconnect\.(org|com)/.test(u)) return;
       relayState = "connecting";
-      setWcDebug({ relay: "connecting" }, "relay socket opening");
       this.addEventListener("open", () => {
         relayState = "open";
-        setWcDebug({ relay: "open" }, "relay socket open");
       });
       this.addEventListener("error", () => {
         relayState = "error (blocked or offline)";
-        setWcDebug({ relay: relayState }, "relay socket error");
       });
       this.addEventListener("close", (e) => {
         if (e.code === 1000) return;
         relayState = `closed ${e.code}${e.reason ? `: ${e.reason}` : ""}`;
-        setWcDebug({ relay: relayState }, `relay ${relayState}`);
       });
     }
   }
   window.WebSocket = Watched as typeof WebSocket;
   window.addEventListener("unhandledrejection", (ev) => {
     const m = String((ev.reason as { message?: string })?.message ?? ev.reason ?? "");
-    if (/walletconnect|relay|project|origin|appkit|reown/i.test(m)) setWcDebug({ initError: m.slice(0, 300) }, `WC error: ${m.slice(0, 120)}`);
+    if (/walletconnect|relay|project|origin|appkit|reown/i.test(m)) wcInitError = m.slice(0, 300);
   });
 }
 function relayHint(): string {
-  const why = dbg.initError || (relayState !== "open" ? relayState : "");
+  const why = wcInitError || (relayState !== "open" ? relayState : "");
   const allow = /origin|unauthori|allow|403|3000/i.test(why)
     ? " This site's domain may be missing from the Reown project's allowed domains."
     : "";
@@ -235,7 +182,6 @@ export async function waitSignClient(timeoutMs = 10000): Promise<SignClientLike>
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     if (mod?.signClient) {
-      if (!dbg.wcReady) setWcDebug({ wcReady: true }, "SignClient ready");
       return mod.signClient;
     }
     await new Promise((r) => setTimeout(r, 150));
@@ -264,13 +210,10 @@ const isMobileUA = () => typeof navigator !== "undefined" && /Android|iPhone|iPa
 
 /** Navigate to a custom-scheme deep link. In an RN WebView this goes through
  * onShouldStartLoadWithRequest → (fails http/https originWhitelist) → Linking.openURL(url). */
-function openDeepLink(url: string, how: string) {
-  setWcDebug({ handoff: `${how} @ ${new Date().toTimeString().slice(0, 8)}` }, `handoff via ${how}`);
+function openDeepLink(url: string) {
   try {
     window.location.href = url;
-  } catch (e) {
-    setWcDebug({}, `location.href threw: ${String(e)}`);
-  }
+  } catch {}
 }
 
 function friendly(e: unknown): Error {
@@ -302,11 +245,9 @@ async function doConnect({ handoff }: WcConnectOptions): Promise<{ address: stri
     const client = await withDeadline(waitSignClient(left(f)), left(f) + 50, "WalletConnect didn't start in time.", f);
     const existing = testnetSession(client);
     if (existing) {
-      setWcDebug({ session: "restored", address: existing.address }, "reusing live session");
       endWcFlow();
       return { address: existing.address };
     }
-    setWcDebug({ session: "proposing" }, "signClient.connect()");
     const { uri, approval } = await withDeadline(
       client.connect({
         // Optional only (requiredNamespaces is deprecated in sign-client 2.2x and Freighter checks
@@ -321,17 +262,15 @@ async function doConnect({ handoff }: WcConnectOptions): Promise<{ address: stri
       throw e instanceof WcTimeoutError ? new Error(`${e.message}${relayHint()} Check the connection and try again.`) : e;
     });
     if (!uri) throw new Error("WalletConnect didn't return a pairing link.");
-    setWcDebug({ uri, session: "proposed – waiting for wallet" }, "pairing URI generated");
 
     if (handoff === "freighter") {
       const deepLink = freighterWcDeepLink(uri);
       patchPending({ phase: "waiting", uri, deepLink, startedAt: Date.now() });
-      openDeepLink(deepLink, "location.href (auto)");
+      openDeepLink(deepLink);
     } else if (modal) {
       await withDeadline(Promise.resolve(modal.open({ uri })), Math.max(left(f), 4000), "The WalletConnect window didn't open.", f);
       modalOpened = true;
       patchPending({ phase: "waiting", uri, startedAt: Date.now() });
-      setWcDebug({ handoff: "AppKit modal opened" }, "AppKit modal open");
       // User closed the AppKit modal without connecting → stop waiting.
       let seenOpen = !!modal.getState?.().open;
       unsub = modal.subscribeState?.((st) => {
@@ -348,7 +287,6 @@ async function doConnect({ handoff }: WcConnectOptions): Promise<{ address: stri
       f,
     );
     const peer = session.peer?.metadata?.name || "The wallet";
-    setWcDebug({}, `session approved by ${peer}`);
     const address = accountOn(session, WC_TESTNET);
     if (!address) {
       const onMain = accountOn(session, WC_PUBNET);
@@ -359,13 +297,11 @@ async function doConnect({ handoff }: WcConnectOptions): Promise<{ address: stri
           : `${peer} didn't share a Stellar Testnet account.`,
       );
     }
-    setWcDebug({ session: "connected", address }, `connected ${address.slice(0, 6)}…`);
     endWcFlow();
     return { address };
   } catch (e) {
     const err = friendly(e);
     const cancelled = err.message.includes(CANCELLED);
-    setWcDebug({ session: cancelled ? "cancelled" : "failed", error: cancelled ? null : err.message }, `error: ${err.message}`);
     endWcFlow(err);
     throw err;
   } finally {
@@ -383,7 +319,6 @@ export async function wcSign(xdr: string): Promise<{ signedTxXdr: string; signer
   const client = await waitSignClient();
   const live = testnetSession(client);
   if (!live) throw new Error("The WalletConnect session ended. Connect your wallet again.");
-  setWcDebug({}, "sign request sent");
   const req = client.request<{ signedXDR: string }>({
     topic: live.s.topic,
     chainId: WC_TESTNET,
@@ -392,9 +327,8 @@ export async function wcSign(xdr: string): Promise<{ signedTxXdr: string; signer
   // In a regular mobile browser the wallet is another app: bring it forward once the request
   // has been published (Freighter ignores redirect links without a ?uri=).
   const native = live.s.peer?.metadata?.redirect?.native;
-  if (isMobileUA() && !inWalletBrowser() && native) setTimeout(() => openDeepLink(native, "wallet redirect"), 900);
+  if (isMobileUA() && !inWalletBrowser() && native) setTimeout(() => openDeepLink(native), 900);
   const { signedXDR } = await req;
-  setWcDebug({}, "signed");
   return { signedTxXdr: signedXDR, signerAddress: live.address };
 }
 
@@ -407,7 +341,6 @@ export async function wcDisconnect() {
       .filter((s) => s.namespaces?.stellar)
       .map((s) => client.disconnect({ topic: s.topic, reason: { code: 6000, message: "User disconnected" } }).catch(() => {})),
   );
-  setWcDebug({ session: "disconnected", address: null }, "disconnected");
 }
 
 function inWalletBrowser(): boolean {
@@ -427,7 +360,7 @@ export function attachWc(m: WcModuleLike, freighterInApp: boolean) {
     const open = m.modal.open.bind(m.modal);
     m.modal.open = (o?: { uri?: string }) => {
       if (o?.uri) {
-        openDeepLink(freighterWcDeepLink(o.uri), "location.href (modal.open)");
+        openDeepLink(freighterWcDeepLink(o.uri));
         return Promise.resolve();
       }
       return open(o);
@@ -437,5 +370,5 @@ export function attachWc(m: WcModuleLike, freighterInApp: boolean) {
 
 /** Manual retry from the in-app sheet (a user tap; some WebViews only follow scheme links on a gesture). */
 export function retryHandoff() {
-  if (pending?.deepLink) openDeepLink(pending.deepLink, "button tap");
+  if (pending?.deepLink) openDeepLink(pending.deepLink);
 }
