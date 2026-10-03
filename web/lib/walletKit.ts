@@ -5,7 +5,7 @@
 import type { StellarWalletsKit as Kit } from "@creit.tech/stellar-wallets-kit/sdk";
 import type { ModuleInterface, Networks, SwkAppTheme } from "@creit.tech/stellar-wallets-kit/types";
 import { config } from "./config";
-import { attachWc, setWcDebug, type WcModuleLike } from "./wcSession";
+import { attachWc, setWcDebug, watchRelay, type WcModuleLike } from "./wcSession";
 
 export type WalletKit = typeof Kit;
 
@@ -69,27 +69,36 @@ export { freighterWcDeepLink } from "./wcSession";
 type WcModule = ModuleInterface & { isAvailable(): Promise<boolean> };
 let wcModule: WcModule | null = null;
 let baseModules: ModuleInterface[] = [];
-let wcDropped = false;
+
+let kitInitParams: Omit<Parameters<WalletKit["init"]>[0], "modules"> | null = null;
+let wcInPicker = false;
+
+/** Is the kit's WalletConnect module ready (SignClient initialised) within `timeoutMs`? Never throws. */
+export async function wcReadyWithin(timeoutMs: number): Promise<boolean> {
+  if (!walletConnectProjectId || !wcModule) return false;
+  const t0 = Date.now();
+  for (;;) {
+    if (await wcModule.isAvailable().catch(() => false)) return true;
+    if (Date.now() - t0 >= timeoutMs) return false;
+    await new Promise((res) => setTimeout(res, 150));
+  }
+}
 
 /**
  * The kit's WalletConnect module initialises its SignClient asynchronously (relay handshake)
- * and reports `isAvailable() === false` until then. The picker treats unavailable wallets as
- * "not installed" and opens their productUrl — https://walletconnect.com/ — when tapped.
- * So wait until it is really ready before opening the picker.
+ * and reports `isAvailable() === false` until then; the picker would then list it as
+ * "not installed" and link to https://walletconnect.com/. So the picker only gets the
+ * WalletConnect entry once it's ready; otherwise it opens straight away without it
+ * (Freighter extension / Albedo / xBull …) and the next Connect re-checks.
  */
-export async function waitForWalletConnect(timeoutMs = 10000): Promise<boolean> {
-  if (!walletConnectProjectId) return false;
-  const kit = await loadWalletKit();
-  if (!wcModule || wcDropped) return false;
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) {
-    if (await wcModule.isAvailable().catch(() => false)) return true;
-    await new Promise((res) => setTimeout(res, 150));
+export async function preparePicker(kit: WalletKit, waitMs = 2500): Promise<boolean> {
+  const ready = await wcReadyWithin(waitMs);
+  if (ready !== wcInPicker && kitInitParams) {
+    kit.init({ ...kitInitParams, modules: ready && wcModule ? [...baseModules, wcModule] : baseModules });
+    wcInPicker = ready;
   }
-  // Never let the picker show a WalletConnect entry that would just link to walletconnect.com.
-  wcDropped = true;
-  kit.init({ modules: baseModules });
-  return false;
+  setWcDebug(ready ? { wcReady: true } : {}, ready ? "picker with WalletConnect" : "picker without WalletConnect (not ready yet)");
+  return ready;
 }
 
 export function loadWalletKit(): Promise<WalletKit> {
@@ -105,6 +114,7 @@ export function loadWalletKit(): Promise<WalletKit> {
       import("@creit.tech/stellar-wallets-kit/modules/rabet"),
     ]);
     const inApp = walletBrowser();
+    watchRelay();
     setWcDebug(
       {
         inApp: inApp ? `${inApp.provider}/${inApp.platform} v${inApp.version ?? "?"}` : "no",
@@ -152,14 +162,19 @@ export function loadWalletKit(): Promise<WalletKit> {
       // Our own proposal / handoff / timeout / signing on top of the kit's SignClient + AppKit
       // (see lib/wcSession.ts for why the kit's built-in flow can hang with Freighter).
       attachWc(mod as unknown as WcModuleLike, inApp?.provider === "freighter");
-      modules[inApp ? "unshift" : "push"](mod);
+      // In Freighter's browser the module is used directly (setWallet); elsewhere it joins the
+      // picker only once ready (preparePicker).
+      if (inApp) {
+        modules.unshift(mod);
+        wcInPicker = true;
+      }
     }
-    StellarWalletsKit.init({
-      modules,
+    kitInitParams = {
       network: config.networkPassphrase as Networks,
       theme: kitTheme,
       authModal: { showInstallLabel: !inApp, hideUnsupportedWallets: !!inApp },
-    });
+    };
+    StellarWalletsKit.init({ ...kitInitParams, modules });
     return StellarWalletsKit;
   })();
   kitPromise.catch(() => (kitPromise = null));

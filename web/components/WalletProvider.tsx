@@ -6,13 +6,13 @@ import {
   kitError,
   loadWalletKit,
   WALLET_NAMES,
-  waitForWalletConnect,
+  preparePicker,
   walletBrowser,
   walletConnectProjectId,
   type WalletBrowser,
   type WalletKit,
 } from "@/lib/walletKit";
-import { setWcDebug, testnetSession, waitSignClient } from "@/lib/wcSession";
+import { beginWcFlow, CANCELLED, endWcFlow, setWcDebug, testnetSession, waitSignClient, withDeadline } from "@/lib/wcSession";
 import { WalletDebugPanel, WcConnectSheet } from "./WcConnectSheet";
 
 interface WalletState {
@@ -77,13 +77,16 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     );
     // Inside a wallet browser the user is here to connect: start WalletConnect's relay
     // handshake now so the first tap pairs immediately.
-    if (b && walletConnectProjectId) waitForWalletConnect().catch(() => {});
+    // Mobile browsers load it too, so the picker usually has the WalletConnect entry ready.
+    if (walletConnectProjectId && (b || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent))) {
+      loadWalletKit().catch((e) => setWcDebug({ initError: kitError(e).message }, "kit prewarm failed"));
+    }
   }, []);
 
   /** Ask the wallet which network it is on. Most wallets (all but Freighter) don't say: degrade to null. */
   const refreshNetwork = useCallback(async (kit: WalletKit) => {
     try {
-      const n = await kit.getNetwork();
+      const n = await withDeadline(kit.getNetwork(), 4000, "getNetwork timeout");
       setNetwork(n.network);
       setPassphrase(n.networkPassphrase);
     } catch {
@@ -102,7 +105,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       } catch {}
       if (!saved) return setReady(true);
       try {
-        const kit = await loadWalletKit();
+        const kit = await withDeadline(loadWalletKit(), 12000, "wallet kit load timeout");
         if (cancelled) return;
         kitRef.current = kit;
         const { address: a } = await kit.getAddress();
@@ -110,13 +113,15 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         if (saved === "wallet_connect") {
           // The kit remembers the address; the WalletConnect session itself lives in the SignClient.
           // Only treat the wallet as connected if that session is still alive on Testnet.
-          const client = await waitSignClient(10000).catch(() => null);
+          const client = await waitSignClient(8000).catch(() => null);
           if (cancelled) return;
           const live = client ? testnetSession(client) : null;
           if (!live) {
-            kit.disconnect().catch(() => {});
+            if (client) kit.disconnect().catch(() => {});
             return;
           }
+          await preparePicker(kit, 0); // make sure the WalletConnect module is the kit's active one
+          kit.setWallet("wallet_connect");
           setAddress(live.address);
           setWalletId("wallet_connect");
           return;
@@ -158,36 +163,41 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
-    setConnecting(true);
+    // Every await below has a deadline: the button never spins for more than ~12 s.
+    const inApp = inFreighterMobile();
+    // In Freighter's browser show the progress sheet right away, before any network work.
+    const f = inApp ? beginWcFlow("freighter") : null;
+    setConnecting(!inApp);
     try {
-      const kit = await loadWalletKit();
+      const kit = await withDeadline(
+        loadWalletKit(),
+        9500,
+        "Couldn't load the wallet code. Check the connection and try again.",
+        f,
+      );
       kitRef.current = kit;
-      // WalletConnect must be ready before the picker snapshots availability,
-      // otherwise its entry links to walletconnect.com instead of connecting.
-      if (walletConnectProjectId) {
-        const ok = await waitForWalletConnect();
-        if (!ok && inFreighterMobile()) {
-          throw new Error(
-            "WalletConnect couldn't start. Check the connection, and that this site's domain is allowed in the Reown project.",
-          );
-        }
-      }
       let a: string;
-      if (inFreighterMobile()) {
+      if (inApp) {
         // Freighter's in-app browser: nothing to pick. Skip the kit picker and the AppKit modal and
-        // hand the WalletConnect pairing link straight to Freighter (see lib/wcSession.ts).
+        // hand the WalletConnect pairing link straight to Freighter (lib/wcSession.ts; the sheet
+        // shows progress, its own deadlines and fallbacks).
         kit.setWallet("wallet_connect");
         ({ address: a } = await kit.fetchAddress());
       } else {
-        ({ address: a } = await kit.authModal());
+        // Don't hold the picker hostage to WalletConnect: wait briefly, else open without it.
+        if (walletConnectProjectId) await preparePicker(kit, 2500);
+        const picked = kit.authModal();
+        setConnecting(false); // the picker (or the wallet's own prompt) is on screen now
+        ({ address: a } = await picked);
       }
       setAddress(a);
       setWalletId(selectedId(kit));
       await refreshNetwork(kit);
     } catch (e) {
       const err = kitError(e);
-      // Closing the picker is not an error.
-      if (!/closed the modal/i.test(err.message)) setError(err.message);
+      if (f) endWcFlow(err);
+      // Closing the picker / sheet is not an error.
+      if (!/closed the modal/i.test(err.message) && !err.message.includes(CANCELLED)) setError(err.message);
     } finally {
       setConnecting(false);
     }
