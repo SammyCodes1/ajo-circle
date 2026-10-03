@@ -7,10 +7,34 @@ import { formatAmount, formatDuration, shortAddr } from "@/lib/format";
 import { friendlyError } from "@/lib/errors";
 import { config, explorer } from "@/lib/config";
 import { getAccountStatus } from "@/lib/stellar";
-import { Alert, Badge, Button, Card, Spinner, TxLink } from "@/components/ui";
+import { Address, Alert, Button, Card, Eyebrow, Pill, Skeleton, TxLink } from "@/components/ui";
 import { Countdown } from "@/components/Countdown";
 import { useWallet } from "@/components/WalletProvider";
 import { AccountPanel } from "@/components/AccountPanel";
+import { RingLegend, RotationRing } from "@/components/RotationRing";
+
+function DashboardSkeleton() {
+  return (
+    <div aria-busy className="space-y-8">
+      <div className="space-y-3">
+        <Skeleton className="h-3 w-24" />
+        <Skeleton className="h-12 w-64" />
+        <Skeleton className="h-4 w-80" />
+      </div>
+      <div className="grid gap-6 lg:grid-cols-[1.05fr_1fr]">
+        <div className="rounded-xl border border-line bg-ivory p-8">
+          <Skeleton className="mx-auto aspect-square w-3/4 !rounded-full" />
+        </div>
+        <div className="space-y-4 rounded-xl border border-line bg-ivory p-6">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-10 w-48" />
+          <Skeleton className="h-2 w-full" />
+          <Skeleton className="h-11 w-full" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function CirclePage() {
   const params = useParams<{ id: string }>();
@@ -52,15 +76,28 @@ export default function CirclePage() {
     return () => clearInterval(t);
   }, [load]);
 
-  if (loadError) return <Alert tone="error">{loadError}</Alert>;
-  if (!circle) return <Spinner label={`Loading circle #${params.id}…`} />;
+  if (loadError)
+    return (
+      <div className="mx-auto max-w-lg py-10 text-center">
+        <p className="font-display text-3xl text-ink">We couldn’t open this circle</p>
+        <div className="mt-5 text-left">
+          <Alert tone="error">{loadError}</Alert>
+        </div>
+        <Link href="/" className="mt-6 inline-block text-sm text-clay-deep underline underline-offset-4">
+          ← Back to all circles
+        </Link>
+      </div>
+    );
+  if (!circle) return <DashboardSkeleton />;
 
   const n = circle.members.length;
   const me = w.address;
+  const done = circle.status === "Completed";
   const isMember = !!me && circle.members.includes(me);
   const iPaid = !!me && circle.paid.includes(me);
-  const nextRecipient =
-    circle.status === "Active" && circle.round + 1 < n ? circle.members[(circle.round + 1) % n] : null;
+  const nextRecipient = circle.status === "Active" && circle.round + 1 < n ? circle.members[(circle.round + 1) % n] : null;
+  const fullPot = circle.contribution * BigInt(n);
+  const deadlinePassed = !!current && Date.now() / 1000 >= Number(current.deadline);
 
   async function contribute() {
     if (!me) return w.connect();
@@ -114,219 +151,309 @@ export default function CirclePage() {
     }
   }
 
+  const ringMembers = circle.members.map((m, i) => ({
+    address: m,
+    paid: !done && circle.paid.includes(m),
+    defaulted: (records[m]?.missed ?? 0) > 0,
+    received: i < circle.round,
+  }));
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="space-y-10">
+      {/* ---------------------------------------------------- heading */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <Link href="/" className="text-sm text-stone-500 hover:underline">
+          <Link href="/" className="text-sm text-muted transition-colors hover:text-ink">
             ← All circles
           </Link>
-          <h1 className="text-3xl font-black">Circle #{circle.id}</h1>
-          <p className="text-stone-600">
-            {formatAmount(circle.contribution)} {config.tokenCode} per member · {n} members · rounds of{" "}
-            {formatDuration(Number(circle.period_secs))}
+          <h1 className="font-display mt-3 text-[2.6rem] leading-none text-ink sm:text-[3.2rem]">Circle №{circle.id}</h1>
+          <p className="mt-3 text-[0.98rem] text-ink-soft">
+            <span className="whitespace-nowrap">
+              <span className="font-numeral text-lg text-ink">{formatAmount(circle.contribution)}</span> {config.tokenCode} per member
+            </span>{" "}
+            · <span className="whitespace-nowrap">{n} members</span> ·{" "}
+            <span className="whitespace-nowrap">rounds of {formatDuration(Number(circle.period_secs))}</span>
           </p>
         </div>
-        {circle.status === "Completed" ? (
-          <Badge tone="stone">Completed — all {n} rounds paid out</Badge>
+        {done ? (
+          <Pill tone="sage" dot className="!px-3 !py-1.5 !text-sm">
+            Completed · all {n} pots paid
+          </Pill>
         ) : (
-          <Badge tone="emerald">
+          <Pill tone="clay" dot className="!px-3 !py-1.5 !text-sm">
             Round {circle.round + 1} of {n}
-          </Badge>
+          </Pill>
         )}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+      {/* ---------------------------------------------------- ring + round */}
+      <div className="grid gap-6 lg:grid-cols-[1.05fr_1fr]">
+        <Card className="flex flex-col !p-4 sm:!p-6">
+          <div className="flex items-center justify-between px-1">
+            <Eyebrow>Rotation</Eyebrow>
+            <span className="text-xs text-muted">clockwise from the top</span>
+          </div>
+          <RotationRing members={ringMembers} current={done ? -1 : circle.round} me={me} className="mt-2">
+            {done ? (
+              <>
+                <p className="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-sage">Complete</p>
+                <p className="font-numeral mt-1 text-4xl leading-none text-ink sm:text-5xl">{n}/{n}</p>
+                <p className="mt-1.5 text-xs text-muted">pots paid out</p>
+              </>
+            ) : (
+              <>
+                <p className="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-muted">
+                  Round {circle.round + 1} of {n}
+                </p>
+                <p className="font-numeral mt-1 text-4xl leading-none text-ink sm:text-5xl">{formatAmount(circle.pot)}</p>
+                <p className="mt-1.5 text-xs text-muted">
+                  of {formatAmount(fullPot)} {config.tokenCode}
+                </p>
+              </>
+            )}
+          </RotationRing>
+          <RingLegend className="mt-auto justify-center border-t border-line px-1 pt-4" />
+        </Card>
+
         <div className="space-y-6">
-          {current && (
-            <Card className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div className="rounded-xl bg-emerald-50 p-4">
-                  <p className="text-xs font-semibold uppercase text-emerald-800">This round&apos;s recipient</p>
-                  <p className="mt-1 font-mono text-sm font-bold" title={current.recipient}>
-                    {shortAddr(current.recipient, 6)}
-                    {current.recipient === me && " (you)"}
-                  </p>
-                </div>
-                <div className="rounded-xl bg-amber-50 p-4">
-                  <p className="text-xs font-semibold uppercase text-amber-900">Pot so far</p>
-                  <p className="mt-1 text-xl font-black">
-                    {formatAmount(current.pot)}{" "}
-                    <span className="text-sm text-stone-500">
-                      / {formatAmount(circle.contribution * BigInt(n))}
+          {current ? (
+            <Card className="space-y-6">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <Eyebrow>This round’s pot goes to</Eyebrow>
+                  <p className="mt-2 flex items-center gap-2 text-lg text-ink">
+                    <span className="font-numeral grid h-8 w-8 shrink-0 place-items-center rounded-full bg-clay text-sm text-white">
+                      {circle.round + 1}
                     </span>
+                    <Address value={current.recipient} chars={6} className="!text-[0.95rem]" />
+                    {current.recipient === me && <Pill tone="clay">you</Pill>}
                   </p>
                 </div>
-                <div className="rounded-xl bg-stone-100 p-4">
-                  <p className="text-xs font-semibold uppercase text-stone-600">Deadline in</p>
-                  <p className="mt-1 text-xl">
-                    <Countdown deadline={Number(current.deadline)} onElapsed={load} />
+                <div className="shrink-0 text-right">
+                  <Eyebrow>Deadline</Eyebrow>
+                  <p className="font-numeral mt-2 text-xl text-ink">
+                    <Countdown deadline={Number(current.deadline)} onElapsed={load} className="text-[1.15rem]" />
                   </p>
                 </div>
               </div>
+
               <div>
-                <div className="mb-1 flex justify-between text-sm">
-                  <span className="font-semibold">
-                    {current.paid.length}/{n} paid
+                <div className="mb-2 flex items-baseline justify-between text-sm">
+                  <span className="text-ink-soft">
+                    <span className="font-numeral text-lg text-ink">{current.paid.length}</span> of {n} paid
                   </span>
-                  {nextRecipient && (
-                    <span className="text-stone-500">
-                      Next up: <span className="font-mono">{shortAddr(nextRecipient)}</span>
-                    </span>
-                  )}
+                  <span className="tnum text-muted">
+                    {formatAmount(current.pot)} / {formatAmount(fullPot)} {config.tokenCode}
+                  </span>
                 </div>
-                <div className="h-2.5 overflow-hidden rounded-full bg-stone-100">
-                  <div
-                    className="h-full rounded-full bg-emerald-600 transition-all"
-                    style={{ width: `${(current.paid.length / n) * 100}%` }}
-                  />
+                <div className="flex gap-1" aria-hidden>
+                  {circle.members.map((m) => (
+                    <span
+                      key={m}
+                      className={`h-2 flex-1 rounded-full transition-colors duration-500 ${
+                        circle.paid.includes(m) ? "bg-sage" : deadlinePassed ? "bg-rust-wash" : "bg-sand"
+                      }`}
+                    />
+                  ))}
                 </div>
               </div>
-              <div className="flex flex-col gap-2 sm:flex-row">
+
+              <div className="flex flex-col gap-2.5 sm:flex-row">
                 {isMember && !iPaid && (
-                  <Button onClick={contribute} loading={busy === "contribute"} className="flex-1">
+                  <Button onClick={contribute} loading={busy === "contribute"} className="flex-1 !py-3">
                     Contribute {formatAmount(circle.contribution)} {config.tokenCode}
                   </Button>
                 )}
                 {isMember && iPaid && (
-                  <div className="flex-1 rounded-xl bg-emerald-50 px-4 py-2.5 text-center text-sm font-semibold text-emerald-800">
-                    ✓ You&apos;ve paid this round
+                  <div className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-sage-wash px-4 py-3 text-sm font-medium text-sage">
+                    <span aria-hidden>✓</span> You’ve paid this round
                   </div>
                 )}
                 {!me && (
-                  <Button onClick={w.connect} className="flex-1">
-                    Connect Freighter to contribute
+                  <Button onClick={w.connect} variant="ink" className="flex-1 !py-3">
+                    Connect wallet to contribute
                   </Button>
                 )}
                 <Button
-                  variant="secondary"
+                  variant={current.payout_ready && me ? (isMember && !iPaid ? "ink" : "primary") : "secondary"}
                   onClick={payout}
                   loading={busy === "payout"}
                   disabled={!current.payout_ready || !me}
-                  className="flex-1"
+                  className="flex-1 !py-3"
                   title={current.payout_ready ? "Anyone can trigger the payout" : "Waiting for all members or the deadline"}
                 >
-                  {current.payout_ready ? "Trigger payout" : "Payout locked"}
+                  {current.payout_ready ? "Release payout" : "Payout locked"}
                 </Button>
               </div>
-              {!current.payout_ready && (
-                <p className="text-xs text-stone-500">
-                  Payout unlocks when all {n} members have paid or the deadline passes. Anyone can
-                  trigger it — the pot always goes to the round&apos;s recipient.
+              <p className="text-xs leading-relaxed text-muted">
+                {current.payout_ready
+                  ? "Payout is unlocked — anyone can release it. The pot can only go to this round’s member."
+                  : `Unlocks when all ${n} members have paid or the deadline passes. Anyone can release it; the pot can only go to this round’s member.`}
+                {me && !isMember && " You’re viewing as a non-member."}
+              </p>
+              {nextRecipient && (
+                <p className="flex items-center gap-2 border-t border-line pt-4 text-sm text-muted">
+                  Next up <span className="text-faint">→</span>
+                  <span className="font-numeral text-ink">{circle.round + 2}</span>
+                  <Address value={nextRecipient} className="text-ink-soft" />
+                  {nextRecipient === me && <Pill tone="clay">you</Pill>}
                 </p>
-              )}
-              {me && !isMember && (
-                <p className="text-xs text-stone-500">You&apos;re not a member of this circle (view only).</p>
               )}
               {txMsg && <Alert tone="success">{txMsg}</Alert>}
               {txErr && <Alert tone="error">{txErr}</Alert>}
             </Card>
+          ) : (
+            <Card className="space-y-3">
+              <Eyebrow>Circle complete</Eyebrow>
+              <p className="font-display text-2xl leading-snug text-ink">
+                Every member has taken their turn. {formatAmount(history.reduce((a, r) => a + BigInt(r.pot), BigInt(0)))}{" "}
+                {config.tokenCode} moved through this circle.
+              </p>
+              <p className="text-sm text-muted">The full record stays on Stellar — see the history below.</p>
+            </Card>
           )}
-
+          {isMember && !done && <AccountPanel need={circle.contribution} />}
           <Card>
-            <h2 className="mb-3 text-lg font-bold">Members &amp; history</h2>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs uppercase text-stone-500">
-                    <th className="py-2">#</th>
-                    <th>Member</th>
-                    <th>This round</th>
-                    <th className="text-right">Paid</th>
-                    <th className="text-right">Missed</th>
-                    <th className="text-right">Received</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {circle.members.map((m, i) => {
-                    const rec = records[m];
-                    const paidNow = circle.paid.includes(m);
-                    return (
-                      <tr key={m} className={`border-b last:border-0 ${m === me ? "bg-amber-50/60" : ""}`}>
-                        <td className="py-2.5 text-stone-500">{i + 1}</td>
-                        <td>
-                          <a
-                            className="font-mono hover:underline"
-                            href={explorer.account(m)}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={m}
-                          >
-                            {shortAddr(m, 5)}
-                          </a>
-                          {m === me && <span className="ml-1 text-xs font-semibold text-amber-800">you</span>}
-                          {i < circle.round && <span className="ml-1 text-xs text-stone-400">· got pot R{i + 1}</span>}
-                        </td>
-                        <td>
-                          {circle.status === "Completed" ? (
-                            <span className="text-stone-400">—</span>
-                          ) : paidNow ? (
-                            <Badge tone="emerald">Paid</Badge>
-                          ) : current && Date.now() / 1000 >= Number(current.deadline) ? (
-                            <Badge tone="red">Late</Badge>
-                          ) : (
-                            <Badge tone="amber">Pending</Badge>
-                          )}
-                        </td>
-                        <td className="text-right font-semibold">{rec?.paid ?? "…"}</td>
-                        <td className={`text-right font-semibold ${rec?.missed ? "text-red-700" : ""}`}>
-                          {rec?.missed ?? "…"}
-                        </td>
-                        <td className="text-right">{rec ? formatAmount(rec.received) : "…"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-
-          {history.length > 0 && (
-            <Card>
-              <h2 className="mb-3 text-lg font-bold">Settled rounds</h2>
-              <ul className="space-y-3">
+            <h2 className="font-display text-xl text-ink">Settled rounds</h2>
+            {history.length === 0 ? (
+              <p className="mt-4 text-sm text-muted">No rounds settled yet. The first payout will appear here.</p>
+            ) : (
+              <ol className="relative mt-5 space-y-5 border-l border-line pl-6">
                 {history.map((r) => (
-                  <li key={r.round} className="rounded-xl border border-stone-200 p-3 text-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-bold">Round {r.round + 1}</span>
-                      <span>
-                        {formatAmount(r.pot)} {config.tokenCode} →{" "}
-                        <span className="font-mono">{shortAddr(r.recipient)}</span>
-                      </span>
+                  <li key={r.round} className="relative">
+                    <span
+                      aria-hidden
+                      className={`absolute -left-[1.85rem] top-1 h-3 w-3 rounded-full border-2 border-ivory ${
+                        r.defaulted.length ? "bg-rust" : "bg-sage"
+                      }`}
+                    />
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                      <p className="font-medium text-ink">Round {r.round + 1}</p>
+                      <p className="text-sm text-ink-soft">
+                        <span className="font-numeral text-base text-ink">{formatAmount(r.pot)}</span> {config.tokenCode} →{" "}
+                        <Address value={r.recipient} />
+                      </p>
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-2 text-xs">
-                      <Badge tone="emerald">{r.paid.length} paid</Badge>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Pill tone="sage">{r.paid.length} paid</Pill>
                       {r.defaulted.length > 0 ? (
                         r.defaulted.map((d) => (
-                          <Badge key={d} tone="red">
-                            defaulted: {shortAddr(d)}
-                          </Badge>
+                          <Pill key={d} tone="rust">
+                            defaulted · {shortAddr(d)}
+                          </Pill>
                         ))
                       ) : (
-                        <Badge tone="stone">no defaults</Badge>
+                        <Pill tone="neutral">no defaults</Pill>
                       )}
                     </div>
                   </li>
                 ))}
-              </ul>
-            </Card>
-          )}
-        </div>
-        <div className="space-y-4">
-          {isMember && <AccountPanel need={circle.contribution} />}
-          <Card className="text-xs text-stone-500">
-            <p>
-              Contract{" "}
-              <a className="font-mono underline" href={explorer.contract(config.contractId)} target="_blank" rel="noreferrer">
-                {shortAddr(config.contractId, 6)}
-              </a>
-            </p>
-            <p className="mt-1">
-              Admin <span className="font-mono">{shortAddr(circle.admin, 6)}</span>
-            </p>
-            <p className="mt-1">Data refreshes every 15 s.</p>
+              </ol>
+            )}
           </Card>
+          <div className="flex flex-wrap gap-x-5 gap-y-1 px-1 text-xs text-muted">
+            <span>
+              Contract{" "}
+              <a className="font-mono underline decoration-line-strong underline-offset-2 hover:text-ink" href={explorer.contract(config.contractId)} target="_blank" rel="noreferrer">
+                {shortAddr(config.contractId, 5)}
+              </a>
+            </span>
+            <span>
+              Admin <Address value={circle.admin} chars={5} />
+            </span>
+            <span>Refreshes every 15 s</span>
+          </div>
         </div>
+      </div>
+
+      {/* ---------------------------------------------------- members + history */}
+      <div>
+        <Card className="!p-0">
+          <div className="flex items-baseline justify-between px-5 pb-3 pt-5 sm:px-6">
+            <h2 className="font-display text-xl text-ink">Members</h2>
+            <span className="text-xs text-muted">in payout order</span>
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
+            <table className="w-full min-w-[520px] text-sm">
+              <thead>
+                <tr className="border-y border-line text-left text-[0.7rem] uppercase tracking-[0.12em] text-muted">
+                  <th className="py-2.5 pl-5 font-medium sm:pl-6">#</th>
+                  <th className="font-medium">Member</th>
+                  <th className="font-medium">This round</th>
+                  <th className="text-right font-medium">Paid</th>
+                  <th className="text-right font-medium">Missed</th>
+                  <th className="pr-5 text-right font-medium sm:pr-6">Received</th>
+                </tr>
+              </thead>
+              <tbody>
+                {circle.members.map((m, i) => {
+                  const rec = records[m];
+                  const paidNow = circle.paid.includes(m);
+                  return (
+                    <tr key={m} className={`border-b border-line/70 last:border-0 ${m === me ? "bg-clay-wash/40" : ""}`}>
+                      <td className="font-numeral py-3 pl-5 text-base text-muted sm:pl-6">{i + 1}</td>
+                      <td>
+                        <a className="text-ink hover:underline" href={explorer.account(m)} target="_blank" rel="noreferrer">
+                          <Address value={m} chars={5} />
+                        </a>
+                        {m === me && <span className="ml-2 text-xs font-medium text-clay-deep">you</span>}
+                        {i < circle.round && <span className="ml-2 text-xs text-muted">· took pot {i + 1}</span>}
+                      </td>
+                      <td>
+                        {done ? (
+                          <span className="text-faint">—</span>
+                        ) : paidNow ? (
+                          <Pill tone="sage" dot>Paid</Pill>
+                        ) : deadlinePassed ? (
+                          <Pill tone="rust" dot>Late</Pill>
+                        ) : (
+                          <Pill tone="ochre" dot>Pending</Pill>
+                        )}
+                      </td>
+                      <td className="tnum text-right text-ink">{rec?.paid ?? "…"}</td>
+                      <td className={`tnum text-right ${rec?.missed ? "font-semibold text-rust" : "text-ink"}`}>
+                        {rec?.missed ?? "…"}
+                      </td>
+                      <td className="tnum pr-5 text-right text-ink sm:pr-6">{rec ? formatAmount(rec.received) : "…"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <ul className="border-t border-line sm:hidden">
+            {circle.members.map((m, i) => {
+              const rec = records[m];
+              const paidNow = circle.paid.includes(m);
+              return (
+                <li key={m} className={`flex items-start gap-3 border-b border-line/70 px-5 py-3.5 last:border-0 ${m === me ? "bg-clay-wash/40" : ""}`}>
+                  <span className="font-numeral w-5 pt-0.5 text-lg leading-none text-muted">{i + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <a className="text-ink" href={explorer.account(m)} target="_blank" rel="noreferrer">
+                        <Address value={m} chars={5} />
+                        {m === me && <span className="ml-2 text-xs font-medium text-clay-deep">you</span>}
+                      </a>
+                      {done ? null : paidNow ? (
+                        <Pill tone="sage" dot>Paid</Pill>
+                      ) : deadlinePassed ? (
+                        <Pill tone="rust" dot>Late</Pill>
+                      ) : (
+                        <Pill tone="ochre" dot>Pending</Pill>
+                      )}
+                    </div>
+                    <p className="tnum mt-1 text-xs text-muted">
+                      paid {rec?.paid ?? "…"} · <span className={rec?.missed ? "font-semibold text-rust" : ""}>missed {rec?.missed ?? "…"}</span> · received{" "}
+                      {rec ? formatAmount(rec.received) : "…"}
+                      {i < circle.round && " · took pot " + (i + 1)}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+
       </div>
     </div>
   );

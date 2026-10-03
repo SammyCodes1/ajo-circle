@@ -1,9 +1,129 @@
 @import "tailwindcss";
 
+/* ------------------------------------------------------------------
+   Ajo Circle design tokens — warm paper, ink, clay & adire indigo
+   ------------------------------------------------------------------ */
+@theme inline {
+  --font-serif: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
+  --font-sans: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, "SFMono-Regular", monospace;
+}
+
+@theme {
+  /* paper */
+  --color-paper: #f5f1ea;
+  --color-ivory: #faf9f5;
+  --color-sand: #ede6da;
+  --color-line: #e2dacc;
+  --color-line-strong: #cfc4b2;
+
+  /* ink */
+  --color-ink: #1f1e1d;
+  --color-ink-soft: #3d3a35;
+  --color-muted: #6b6560;
+  --color-faint: #8a847c; /* decorative only (< AA for text) */
+
+  /* clay (primary) */
+  --color-clay: #c96442;
+  --color-clay-soft: #d97757;
+  --color-clay-strong: #b5532f; /* button bg, AA with white */
+  --color-clay-deep: #9a4325; /* hover / clay text on paper */
+  --color-clay-wash: #f6e4da;
+
+  /* adire indigo (secondary) */
+  --color-indigo: #2f3b5c;
+  --color-indigo-soft: #56618a;
+  --color-indigo-wash: #e4e6ee;
+
+  /* status — warm & soft */
+  --color-sage: #4f6b4a;
+  --color-sage-bright: #7c9a6c;
+  --color-sage-wash: #e4eadb;
+  --color-rust: #9e3f2c;
+  --color-rust-wash: #f5e0d8;
+  --color-ochre: #7d5a12;
+  --color-ochre-bright: #c8962e;
+  --color-ochre-wash: #f3e6c6;
+
+  --ease-calm: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
+  --animate-rise: rise 0.5s var(--ease-calm) both;
+  --animate-spin-slow: spin 60s linear infinite;
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
 :root {
   color-scheme: light;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  @apply bg-stone-50 text-stone-900 antialiased;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* faint paper grain */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.28 0 0 0 0 0.2 0 0 0 .045 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--color-clay-wash);
+  color: var(--color-ink);
+}
+
+/* editorial serif helpers */
+.font-display {
+  font-family: var(--font-serif);
+  font-variation-settings: "SOFT" 30, "WONK" 0, "opsz" 96;
+  letter-spacing: -0.02em;
+}
+.font-numeral {
+  font-family: var(--font-serif);
+  font-variation-settings: "SOFT" 20, "opsz" 48;
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.01em;
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* consistent, visible keyboard focus */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-clay-strong);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-sand) 0%,
+    #f6f1e8 50%,
+    var(--color-sand) 100%
+  );
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

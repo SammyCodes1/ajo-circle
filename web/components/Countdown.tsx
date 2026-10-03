@@ -2,7 +2,15 @@
 import { useEffect, useState } from "react";
 import { formatDuration } from "@/lib/format";
 
-export function Countdown({ deadline, onElapsed }: { deadline: number; onElapsed?: () => void }) {
+export function Countdown({
+  deadline,
+  onElapsed,
+  className = "",
+}: {
+  deadline: number;
+  onElapsed?: () => void;
+  className?: string;
+}) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now() / 1000), 1000);
@@ -14,6 +22,6 @@ export function Countdown({ deadline, onElapsed }: { deadline: number; onElapsed
     // only fire when crossing zero
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [left <= 0]);
-  if (left <= 0) return <span className="font-semibold text-red-700">Deadline passed</span>;
-  return <span className="font-mono font-semibold tabular-nums">{formatDuration(left)}</span>;
+  if (left <= 0) return <span className={`text-rust ${className}`}>Deadline passed</span>;
+  return <span className={`tnum ${className}`}>{formatDuration(left)}</span>;
 }

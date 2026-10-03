@@ -2,11 +2,40 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ajo, Circle } from "@/lib/ajo";
-import { formatAmount, formatDuration } from "@/lib/format";
 import { friendlyError } from "@/lib/errors";
 import { config, explorer } from "@/lib/config";
-import { Alert, Badge, Card, LinkButton, Spinner } from "@/components/ui";
+import { Alert, Eyebrow, LinkButton } from "@/components/ui";
+import { AdirePattern } from "@/components/Brand";
+import { RotationRing } from "@/components/RotationRing";
+import { CircleCard, CircleCardSkeleton } from "@/components/CircleCard";
 import { useWallet } from "@/components/WalletProvider";
+
+const DEMO = [
+  { address: "GADE…", received: true },
+  { address: "GBOL…", received: true },
+  { address: "GCHI…", paid: true },
+  { address: "GDAY…", paid: true },
+  { address: "GEMEK…", paid: true, defaulted: true },
+  { address: "GFOL…" },
+];
+
+const STEPS = [
+  {
+    n: "01",
+    t: "Form the circle",
+    d: "Choose members, a USDC amount and a round length. Payout order is fixed on-chain the moment you create it.",
+  },
+  {
+    n: "02",
+    t: "Everyone contributes",
+    d: "Each round, every member pays their share into the contract — signed in Freighter, settled in seconds.",
+  },
+  {
+    n: "03",
+    t: "The pot rotates",
+    d: "Once all have paid, or the deadline passes, anyone can release the pot to that round’s member. Missed payments stay on the record.",
+  },
+];
 
 export default function Home() {
   const { address } = useWallet();
@@ -18,6 +47,7 @@ export default function Home() {
       const n = await ajo.circleCount();
       const ids = Array.from({ length: n }, (_, i) => n - 1 - i); // newest first
       setCircles(await Promise.all(ids.map((i) => ajo.getCircle(i))));
+      setError(null);
     } catch (e) {
       setError(friendlyError(e));
     }
@@ -29,104 +59,102 @@ export default function Home() {
   const mine = (c: Circle) => !!address && (c.members.includes(address) || c.admin === address);
 
   return (
-    <div className="space-y-8">
-      <section className="overflow-hidden rounded-3xl bg-emerald-800 px-6 py-10 text-white sm:px-10">
-        <p className="text-sm font-semibold uppercase tracking-widest text-amber-300">
-          Ajo · Esusu · Susu · Chama
-        </p>
-        <h1 className="mt-2 max-w-2xl text-3xl font-black leading-tight sm:text-4xl">
-          Save together in USDC. Get paid in turn. No one holds the pot.
-        </h1>
-        <p className="mt-3 max-w-2xl text-emerald-100">
-          A Soroban smart contract collects each round&apos;s contributions and pays the whole pot to
-          the next member in the rotation — with every payment, payout and missed round recorded on
-          Stellar.
-        </p>
-        <div className="mt-6 flex flex-wrap gap-3">
-          <LinkButton href="/create" variant="secondary">
-            Start a circle
-          </LinkButton>
-          <a
-            className="inline-flex items-center rounded-xl px-4 py-2.5 text-sm font-semibold text-emerald-100 hover:bg-emerald-700"
-            href={explorer.contract(config.contractId)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            View contract on stellar.expert ↗
-          </a>
+    <div className="space-y-24 sm:space-y-28">
+      {/* ---------------------------------------------------------- hero */}
+      <section className="grid items-center gap-10 lg:grid-cols-[1.08fr_1fr] lg:gap-14">
+        <div className="animate-rise">
+          <Eyebrow>Ajo · Esusu · Susu · Chama — on Stellar</Eyebrow>
+          <h1 className="font-display mt-5 max-w-[14ch] text-[2.75rem] leading-[1.02] text-ink sm:text-[3.6rem] lg:text-[4.1rem]">
+            Save together. Take turns. <em className="text-clay-deep [font-variation-settings:'SOFT'_100,'WONK'_1,'opsz'_96]">Trust the circle</em>, not the collector.
+          </h1>
+          <p className="mt-6 max-w-[46ch] text-[1.05rem] leading-relaxed text-ink-soft">
+            Ajo Circle is the rotating savings group you already know, run by a Soroban smart
+            contract. Contributions in USDC are held by code, the pot moves in a fixed order, and
+            every payment — or missed one — is on the record.
+          </p>
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <LinkButton href="/create">Start a circle</LinkButton>
+            <LinkButton href="#circles" variant="secondary">
+              Browse circles
+            </LinkButton>
+            <a
+              className="ml-1 text-sm text-muted underline decoration-line-strong underline-offset-4 transition-colors hover:text-ink"
+              href={explorer.contract(config.contractId)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Contract on stellar.expert ↗
+            </a>
+          </div>
+        </div>
+
+        <div className="relative">
+          <div className="absolute inset-0 overflow-hidden rounded-[28px] border border-line bg-[#efe9df]">
+            <AdirePattern className="absolute inset-0" opacity={0.11} />
+            <div className="absolute inset-0 bg-[radial-gradient(closest-side,#f5f1ea_55%,transparent)]" />
+          </div>
+          <div className="relative px-4 py-6 sm:px-8 sm:py-8">
+            <RotationRing members={DEMO} current={2} showLabels={false} title="Example circle" className="max-w-[400px]">
+              <p className="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-muted">Round 3 of 6</p>
+              <p className="font-numeral mt-1 text-[2.4rem] leading-none text-ink sm:text-5xl">60</p>
+              <p className="mt-1 text-xs text-muted">USDC pot → member 3</p>
+            </RotationRing>
+          </div>
         </div>
       </section>
 
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-xl font-bold">Circles</h2>
-          <button onClick={load} className="text-sm font-medium text-emerald-700 hover:underline">
+      {/* ---------------------------------------------------------- circles */}
+      <section id="circles" className="scroll-mt-24">
+        <div className="mb-6 flex items-end justify-between gap-4 border-b border-line pb-4">
+          <div>
+            <Eyebrow>Live on testnet</Eyebrow>
+            <h2 className="font-display mt-2 text-3xl text-ink">Circles</h2>
+          </div>
+          <button
+            onClick={load}
+            className="text-sm text-muted underline-offset-4 transition-colors hover:text-ink hover:underline"
+          >
             Refresh
           </button>
         </div>
         {error && <Alert tone="error">{error}</Alert>}
-        {!circles && !error && <Spinner label="Loading circles from Soroban…" />}
-        {circles && circles.length === 0 && (
-          <Card>
-            No circles yet. <Link className="font-semibold text-emerald-700 underline" href="/create">Create the first one</Link>.
-          </Card>
-        )}
-        <div className="grid gap-4 sm:grid-cols-2">
-          {circles?.map((c) => (
-            <Link key={c.id} href={`/circle/${c.id}`} className="group">
-              <Card className="h-full transition group-hover:border-emerald-400 group-hover:shadow-md">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-stone-500">Circle #{c.id}</p>
-                    <p className="mt-1 text-2xl font-black">
-                      {formatAmount(c.contribution)} <span className="text-base font-bold text-stone-500">{config.tokenCode}</span>
-                    </p>
-                    <p className="text-sm text-stone-500">
-                      per member · every {formatDuration(Number(c.period_secs))}
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    {c.status === "Completed" ? (
-                      <Badge tone="stone">Completed</Badge>
-                    ) : (
-                      <Badge tone="emerald">Round {c.round + 1}/{c.members.length}</Badge>
-                    )}
-                    {mine(c) && <Badge tone="amber">You&apos;re in</Badge>}
-                  </div>
-                </div>
-                <div className="mt-4 flex items-center justify-between text-sm">
-                  <span className="text-stone-600">{c.members.length} members</span>
-                  {c.status === "Active" && (
-                    <span className="text-stone-600">
-                      {c.paid.length}/{c.members.length} paid · pot {formatAmount(c.pot)}
-                    </span>
-                  )}
-                </div>
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-stone-100">
-                  <div
-                    className="h-full rounded-full bg-emerald-600"
-                    style={{
-                      width: `${(Math.min(c.round, c.members.length) / c.members.length) * 100}%`,
-                    }}
-                  />
-                </div>
-              </Card>
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {!circles && !error && [0, 1, 2].map((i) => <CircleCardSkeleton key={i} />)}
+          {circles?.map((c) => <CircleCard key={c.id} c={c} mine={mine(c)} />)}
+          {circles && (
+            <Link
+              href="/create"
+              className="group flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-line-strong p-6 text-center transition-colors hover:border-clay hover:bg-ivory/60"
+            >
+              <span className="grid h-11 w-11 place-items-center rounded-full border border-line-strong text-xl text-muted transition-colors group-hover:border-clay group-hover:text-clay-deep">
+                +
+              </span>
+              <span className="font-display text-lg text-ink">
+                {circles.length === 0 ? "Start the first circle" : "Start a new circle"}
+              </span>
+              <span className="max-w-[26ch] text-sm text-muted">
+                Invite your people, pick an amount, set the rhythm.
+              </span>
             </Link>
-          ))}
+          )}
         </div>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-3">
-        {[
-          ["1. Form a circle", "Pick members, a USDC amount and a round length. The admin signs once."],
-          ["2. Everyone contributes", "Each member pays their share into the contract every round, signed in Freighter."],
-          ["3. Pot rotates", "When all have paid — or the deadline passes — anyone triggers the payout to the next member. Missed payments are recorded."],
-        ].map(([t, d]) => (
-          <Card key={t}>
-            <h3 className="font-bold">{t}</h3>
-            <p className="mt-1 text-sm text-stone-600">{d}</p>
-          </Card>
-        ))}
+      {/* ---------------------------------------------------------- how */}
+      <section>
+        <Eyebrow>How it works</Eyebrow>
+        <h2 className="font-display mt-2 max-w-[22ch] text-3xl text-ink">
+          The same circle your mother trusted, with the books kept by Stellar.
+        </h2>
+        <ol className="mt-10 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3">
+          {STEPS.map((s) => (
+            <li key={s.n} className="bg-ivory p-6">
+              <span className="font-numeral text-3xl text-clay">{s.n}</span>
+              <h3 className="mt-4 text-[1.02rem] font-semibold text-ink">{s.t}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted">{s.d}</p>
+            </li>
+          ))}
+        </ol>
       </section>
     </div>
   );
