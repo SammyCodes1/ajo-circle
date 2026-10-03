@@ -42,10 +42,10 @@ But it runs on trust in one person — the collector (*alajo*):
 | Need | Ajo Circle on Stellar |
 |---|---|
 | No one should hold the pot | A **Soroban contract** escrows contributions and pays out by rule — no collector custody. |
-| Stable value | Contributions are in **USDC** via the token's **Stellar Asset Contract (SAC)**, so the same asset works in classic wallets and contracts. |
+| Stable value | Contributions are in a USDC-style asset via its **Stellar Asset Contract (SAC)**, so the same asset works in classic wallets and contracts. On testnet this is the **project's own test USDC** (not Circle's). The contract pins this one token in its constructor; circles can't pick another. |
 | Fair, fixed order | Payout recipient is `members[round % n]`, fixed at creation. Nobody can reorder it. |
 | Trustworthy records | Every contribution, payout and **missed payment (default)** is on-chain and emitted as events. |
-| Group can't be stuck by one person | **Anyone** can trigger the payout once everyone has paid *or* the round deadline passes; unpaid members are recorded as defaulted. |
+| Group can't be stuck by one person | **Anyone** can `settle` a round once everyone has paid *or* the deadline passes; unpaid members are recorded as defaulted and covered from their collateral (or owe a debt). Money is never pushed: each member **claims** what's theirs, so one bad address can't block a payout. If nobody settles for 2 periods past a deadline, **anyone** can `unwind` the circle and everyone can claim a pro-rata refund. |
 | Cheap & fast for small amounts | Stellar fees are fractions of a cent and finality is ~5 s — fine for ₦5,000-sized contributions. |
 | Familiar wallets | Members sign with **any Stellar wallet** via Stellar Wallets Kit (Freighter, Albedo, xBull, LOBSTR, Hana, Rabet, optional WalletConnect); USDC trustlines and balances are standard Stellar. |
 
@@ -57,8 +57,8 @@ But it runs on trust in one person — the collector (*alajo*):
 │  - Wallets Kit connect/sign│  RPC   │  ┌─────────────────────────┐  │
 │  - network/trustline/      ├───────►│  │ Ajo contract (Soroban)  │  │
 │    balance checks          │        │  │  circles, rounds,       │  │
-│  - create / contribute /   │        │  │  member records, events │  │
-│    payout / history        │        │  └──────────┬──────────────┘  │
+│  - create / accept / pay / │        │  │  member state, events   │  │
+│    settle / claim / history│        │  └──────────┬──────────────┘  │
 └──────────────┬─────────────┘        │             │ token.transfer  │
                │ Horizon (balances,   │  ┌──────────▼──────────────┐  │
                │ changeTrust)         │  │ USDC SAC (test asset)   │  │
@@ -69,37 +69,52 @@ contracts/ajo   Rust, soroban-sdk 28     scripts/   stellar CLI deploy + e2e + f
 
 - **contracts/ajo** — the Soroban contract (Rust, `soroban-sdk` 28) + unit tests.
 - **web** — Next.js 16 + TypeScript + Tailwind v4, `@stellar/stellar-sdk` 17 and `@creit.tech/stellar-wallets-kit` 2.7. Reads use RPC simulation; writes are built → `prepareTransaction` → signed in the connected wallet (`StellarWalletsKit.signTransaction` with the testnet passphrase and address) → submitted → polled. No secrets in the frontend; all config is `NEXT_PUBLIC_*` public IDs.
-- **scripts** — `stellar` CLI scripts to deploy to testnet, run an end-to-end cycle, and fund a demo wallet with test USDC.
+- **scripts** — `stellar` CLI scripts to deploy to testnet (the deploy passes the token to the constructor), run the v2 end-to-end smoke test, and fund a demo wallet with test USDC.
 
-## Contract API
+## Contract API (v2)
 
-All amounts are `i128` in the token's smallest unit (USDC has 7 decimals: `10 USDC = 100000000`).
+All amounts are `i128` in the token's smallest unit (7 decimals: `10 USDC = 100000000`). `c` = the circle's contribution, `n` = members, slot `k` = payout position (0-based).
 
 | Function | Who | Description |
 |---|---|---|
-| `create_circle(admin, token, contribution: i128, members: Vec<Address>, period_secs: u64) -> u32` | admin (auth) | Validates ≥2 unique members (max 50), `contribution > 0`, `period_secs > 0`. Round 0 starts now. Returns the circle id. |
-| `contribute(circle_id, member)` | member (auth) | Must be a member, once per round. Transfers `contribution` from member to the contract. Late payments are accepted until someone calls `payout`. |
-| `payout(circle_id) -> i128` | anyone | Allowed when all members paid **or** `now >= round_start + period_secs`. Sends the pot to `members[round % n]`, records unpaid members as defaulted, advances the round (new deadline from now). After `n` rounds the circle is `Completed`. |
-| `get_circle(circle_id) -> Circle` | view | Admin, token, contribution, members, period, round, round_start, status, paid list, pot. |
-| `get_round_status(circle_id, round) -> RoundStatus` | view | recipient, deadline, paid, unpaid, defaulted, pot, settled, payout_ready. Current round is computed live; past rounds come from stored history. |
-| `get_member_record(circle_id, member) -> MemberRecord` | view | `paid`, `missed`, `received`, `missed_rounds`. |
-| `circle_count() -> u32` | view | Circles are numbered `0..count`. |
+| `__constructor(token)` | deployer | Pins the one token (test-USDC SAC) every circle uses. |
+| `create_circle(admin, contribution, members, period_secs, join_window_secs) -> u32` | creator (auth) | 2–20 unique members, `c > 0`, period and join window ≥ 60 s. Circle starts **Forming**. The creator has no special powers afterwards. |
+| `accept(circle_id, member, collateral)` | member (auth) | During the join window. `collateral` is a multiple of `c`, at most `R_k = c·(n−1−k)`. When all `n` have accepted the circle becomes **Active** and round 0 starts. |
+| `post_collateral(circle_id, member, amount)` | member (auth) | While Active, top up collateral (multiple of `c`; cap `R_k` before receiving, `need` after). |
+| `cancel(circle_id)` | anyone | Forming circle whose join window closed with someone missing → **Cancelled**; all posted collateral becomes claimable. |
+| `contribute(circle_id, member)` | member (auth) | Active only, once per round. Transfers `c` into the contract. Late payments are accepted until the round is settled. |
+| `settle(circle_id) -> i128` | anyone | When all paid **or** `now ≥ round_start + period_secs`. Covers each defaulter (other than the recipient) from collateral, else records a **debt** to the recipient; credits the pot through the pipeline (below); releases excess collateral; advances the round. `payout` is an alias. No token transfers. |
+| `unwind(circle_id)` | anyone | Active circle, `now ≥ deadline + 2·period_secs` with no settle. Pot + all collateral are shared pro-rata to each member's unreturned money (`total_in − total_credited`); status **Cancelled**. |
+| `claim(circle_id, member) -> i128` | member (auth) | Withdraws `claimable` (any status). |
+| `token()` · `circle_count()` · `get_circle(id)` | view | |
+| `get_round_status(id, round)` | view | recipient, deadline, paid / unpaid / defaulted, pot, plus for settled rounds: covered from collateral, debts created, to debts, withheld, to claimable. |
+| `get_member_state(id, member)` | view | slot, accepted, received, collateral, claimable, debts, totals in / credited / claimed, paid, missed rounds. |
+| `required_collateral(id, member)` | view | Collateral still to post to reach the target. |
+| `get_member_record(id, member)` | view | v1-shaped summary (paid, missed, received gross, missed rounds). |
 
-**Errors** (`Error(Contract, #n)`): 1 TooFewMembers · 2 DuplicateMember · 3 InvalidContribution · 4 InvalidPeriod · 5 CircleNotFound · 6 NotMember · 7 AlreadyContributed · 8 PayoutNotReady · 9 CircleClosed · 10 TooManyMembers · 11 RoundNotFound.
+**Errors** (`Error(Contract, #n)`): 1 TooFewMembers · 2 DuplicateMember · 3 InvalidContribution · 4 InvalidPeriod · 5 CircleNotFound · 6 NotMember · 7 AlreadyContributed · 8 PayoutNotReady · 9 CircleClosed · 10 TooManyMembers · 11 RoundNotFound · 12 NotForming · 13 NotActive · 14 AlreadyAccepted · 15 JoinWindowClosed · 16 CancelNotAllowed · 17 UnwindNotAllowed · 18 InvalidCollateral · 19 NothingToClaim · 20 AmountTooLarge · 21 CreditLoop · 22 AlreadyInitialized.
 
-**Events** (`#[contractevent]`): `circle_created`, `contributed`, `paid_out` (includes the defaulted list), `circle_completed`.
+**Events** (`#[contractevent]`, topic = circle id): `circle_created`, `member_accepted`, `circle_activated`, `collateral_posted`, `contributed`, `default_covered`, `debt_created`, `debt_repaid`, `collateral_withheld`, `collateral_released`, `paid_out` (gross, to debts, withheld, to claimable, defaulted list), `claimed`, `circle_cancelled`, `circle_unwound`, `circle_completed`.
 
 **Storage & TTL**: the circle counter lives in instance storage (extended to ~30 days on every write). Circles, settled rounds and member records live in persistent storage and are extended to ~90 days whenever they are read or written (threshold ~60 days), so active circles never expire. A circle idle for >90 days would need a TTL extension/restore (`stellar contract extend` / `restore`) before use.
 
 ### Unit tests
 
-`cargo test` (10 tests): full happy cycle (3 rounds, balances net to zero, auth tree checked), duplicate contribution, non-member, unknown circle, payout before ready, default after period (ledger time advanced; also a round where nobody pays), closure after final round, invalid create params (too few / duplicates / zero & negative contribution / zero period / too many), admin auth required, independent circles.
+`cargo test`: 50 unit tests (happy path with exact nets of 0, the on-chain "circle #5" walk-away scenario, collateral caps, debts and the credit pipeline, declining release, cancel, unwind, claims in every status, auth, TTL bumps, frozen accounts, a 20-member budget test natively and against the built wasm) plus 7 property tests in `prop.rs` that compare the contract against a Rust port of the auditor's reference model. Release runs use 10,000 random circles per property:
+
+```bash
+PROPTEST_CASES=10000 cargo test --release -p ajo prop_ -- --nocapture
+```
 
 ## Testnet deployment
 
+> **v2 (default protection):** contract ID **TBD**. It will be deployed only after the audit clears a specific commit.
+>
+> **v1 is deprecated:** `CBH6266NK6UGOLQ6NEUWM7EYANTMHOB5CLCJ27LZ3ARAARP52CIST4EZ` had **no default protection** (a member could take their pot and stop paying; see the audit). Don't use it for new circles. The IDs and runs below are the v1 record.
+
 | | ID |
 |---|---|
-| Ajo contract | [`CBH6266NK6UGOLQ6NEUWM7EYANTMHOB5CLCJ27LZ3ARAARP52CIST4EZ`](https://stellar.expert/explorer/testnet/contract/CBH6266NK6UGOLQ6NEUWM7EYANTMHOB5CLCJ27LZ3ARAARP52CIST4EZ) |
+| Ajo contract (v1, deprecated) | [`CBH6266NK6UGOLQ6NEUWM7EYANTMHOB5CLCJ27LZ3ARAARP52CIST4EZ`](https://stellar.expert/explorer/testnet/contract/CBH6266NK6UGOLQ6NEUWM7EYANTMHOB5CLCJ27LZ3ARAARP52CIST4EZ) |
 | Test USDC SAC | [`CATRFP36R3S26TGC2W5VQKV7ZFWKQ2B2HAJI6RXUTSB442UBTPJDO5MB`](https://stellar.expert/explorer/testnet/contract/CATRFP36R3S26TGC2W5VQKV7ZFWKQ2B2HAJI6RXUTSB442UBTPJDO5MB) |
 | Test asset | `USDC:GDV2MVS4BPWM7E2MHVVPLEVYJL2EMOSHZEAK4OV4YYTPSAQ4QFV3NDAA` (throwaway testnet issuer) |
 | Wasm hash | `14344fb9e8babb38125ec05389e701a0de5c5e8015dd38630539688fd5c443dc` |
@@ -150,7 +165,7 @@ For phones without a Stellar wallet (or networks where WalletConnect can't reach
 
 - The keypair is generated in the browser (`@stellar/stellar-sdk`) and the secret is stored **only in this browser's localStorage** (`ajo:testnet-wallet:v1`, labelled testnet-only). It is never sent anywhere; signing happens locally and refuses any network but Stellar Testnet (`web/lib/localWallet.ts`).
 - On create it runs **auto-setup**: Friendbot → USDC trustline (signed locally) → test USDC from `/api/faucet`. Interrupted setups finish on the next visit.
-- It is a Stellar Wallets Kit module, so create / contribute / payout / trustline all sign through the same path as other wallets, with no popups. *Ask before signing* (wallet menu) shows a confirm sheet describing each transaction.
+- It is a Stellar Wallets Kit module, so every contract call and the trustline sign through the same path as other wallets. *Ask before signing* is **on by default** (you can turn it off in the wallet menu). It shows a confirm sheet with the function, its arguments and the authorization tree, and flags any contract other than Ajo or the pinned test-USDC SAC. Auto-setup's own trustline step signs without the sheet.
 - Wallet menu: back up / show the secret (after a warning), *Get test USDC*, *Forget this wallet*. *Import a testnet key* lets you use an existing funded testnet account.
 
 **Faucet (`/api/faucet`)** — `GET` reports whether it's enabled; `POST {address}` sends `FAUCET_AMOUNT` (default 100) test USDC from the account whose secret is in the **server-only** env var `FAUCET_SECRET`. Testnet passphrase only, destination must exist and hold the USDC trustline (and have < 1,000), max once per address per 10 min, 3 per IP per 10 min, 120 per instance per hour (in-memory, best effort on serverless). Without `FAUCET_SECRET` the faucet is hidden and the app says to ask the admin. Use a dedicated distributor, not the issuer:
@@ -214,7 +229,7 @@ cd web && cp .env.example .env.local && npm install && npm run dev
 
 # optional: own deployment + scripted end-to-end cycle
 ./scripts/deploy-testnet.sh
-./scripts/e2e-testnet.sh                       # 3 members, all pay, payout, then a default round
+./scripts/e2e-testnet.sh                       # v2 smoke test: accept w/ collateral, settle, default, claim, cancel
 ./scripts/fund-test-usdc.sh G...YOUR_WALLET_ADDRESS 500
 ```
 
@@ -223,19 +238,37 @@ cd web && cp .env.example .env.local && npm install && npm run dev
 ## Demo walkthrough (≈3 min)
 
 1. **Setup** (before recording): three testnet wallet accounts (A, B, C) — e.g. Freighter accounts, or Albedo. For each: open the app → *Fund with Friendbot* (if new) → *Add USDC trustline* → run `fund-test-usdc` for its address.
-2. **Create** (A): *Create* → 10 USDC, round length *3 minutes (demo)*, paste A, B, C → *Create circle* → sign in your wallet → open the dashboard.
-3. **Contribute**: as A, B and C, press *Contribute 10 USDC* (switch account in Freighter — the page follows — or use *Switch wallet* in the header). Watch the paid bar and pot fill.
-4. **Payout**: all paid → *Trigger payout* is unlocked → anyone presses it → 30 USDC lands with A; open the explorer link.
-5. **Default**: next round, only A and B pay. Show *Payout locked* + the countdown. When it hits zero, trigger payout → B gets 20 USDC, **C is marked defaulted** in *Settled rounds* and in *My history*.
-6. Show the contract and events on stellar.expert; mention the CLI e2e record and unit tests.
+2. **Create** (A): *Create* → 10 USDC, round length *3 minutes (demo)*, join window *5 minutes*, paste A, B, C → *Create circle* → sign in your wallet → open the dashboard.
+3. **Accept**: as A, B and C, open the circle and accept your slot. A posts 20 USDC collateral, B posts 10 and C (last slot) posts 0. Once all three accept, round 1 starts.
+4. **Contribute**: as A, B and C, press *Contribute 10 USDC* (switch account in Freighter — the page follows — or use *Switch wallet* in the header). Watch the paid bar and pot fill.
+5. **Settle & claim**: all paid → *Settle round* unlocks → anyone presses it → A's 30 USDC is shown as claimable → A presses *Claim*; open the explorer link.
+6. **Default**: next round, A skips. Show the countdown. When it hits zero anyone settles: B still gets 30 USDC (10 taken from A's collateral) and A is marked defaulted in *Settled rounds* and in *My history*.
+7. Show the contract and events on stellar.expert; mention the CLI e2e record and unit tests.
 
 Error states worth showing: Freighter on Mainnet → red *Wrong network* banner; account without trustline → *Missing trustline* + one-click fix; insufficient USDC → *Low balance* message before signing.
 
+## v2 default protection
+
+v1 had no protection: a member could receive their pot early and then stop paying. v2 (branch `fix/collateral`, pending audit) adds:
+
+- **Slot collateral.** Slot `k` may post up to `R_k = c·(n−1−k)` when accepting (early slots post more; the last slot posts nothing). Posting is optional, in multiples of `c`.
+- **Withholding.** Whatever a member hasn't posted is held back from their own pot and kept as collateral, up to `c` for each remaining round.
+- **Cover from collateral.** When someone misses a round, `settle` takes `c` from their collateral for the recipient.
+- **Debts.** If collateral can't cover it, the shortfall is recorded as a debt to that round's recipient.
+- **Pipeline.** Any money credited to a member pays their open debts first (oldest first, passed on to the creditors), then tops up their collateral, then becomes claimable.
+- **Declining release.** After each round, collateral above what the remaining rounds need is released to members who have received and owe nothing; everything left is released when the circle completes.
+- **Pull claims.** `settle` moves no tokens; each member calls `claim` for their balance, in any status.
+- **Cancel.** If the join window closes without everyone accepting, anyone can cancel and collateral is refunded.
+- **Unwind.** If a round goes 2 periods past its deadline without a settle, anyone can unwind: pot + collateral are refunded pro-rata to what each member put in and hasn't got back.
+
+In the on-chain "circle #5" scenario (a member takes the pot and walks away), v1 nets were +10 / −10 / 0. The v2 contract gives 0 / 0 / 0. Honest members never end up negative, and that's checked by the property tests.
+
 ## Limitations & next steps
 
-- **No collateral / penalties yet**: a member who defaults still receives their pot when it's their turn. Next: stake-based collateral, slashing defaulted members' payouts, or reordering defaulters to the end.
-- Member list and order are fixed at creation; no invites/acceptance flow, no mid-circle replacement.
-- Late contributions are accepted until someone calls `payout`; the deadline is "payout unlocks", not "contributions close".
+- Member list and order are fixed at creation (members accept their slot, but there's no mid-circle replacement).
+- Late contributions are accepted until someone calls `settle`; the deadline is "settle unlocks", not "contributions close".
+- Members can't yet pay off a debt directly (`repay_debt`); debts are only repaid out of money credited to the debtor later.
+- Collateral protects up to what was posted. A member who posts less than `R_k` has the rest held back from their own pot (withheld), so the group is fully covered only once that is in place; until then a walk-away leaves debts.
 - Testnet only, unaudited. Mainnet would use Circle's USDC SAC and an audit.
 - Listing circles reads every circle (fine for a demo; an indexer over contract events would scale better).
 
