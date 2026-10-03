@@ -290,6 +290,16 @@ pub struct PaidOut {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Claimed {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub member: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CircleCancelled {
     #[topic]
     pub circle_id: u32,
@@ -793,6 +803,36 @@ impl AjoContract {
             CircleCompleted { circle_id }.publish(&env);
         }
         Ok(amount)
+    }
+
+    /// Withdraw everything claimable (member auth). The only outgoing
+    /// transfer in the contract; allowed in any status. State is saved
+    /// before the transfer (checks-effects-interactions).
+    pub fn claim(env: Env, circle_id: u32, member: Address) -> Result<i128, Error> {
+        member.require_auth();
+        let circle = load_circle(&env, circle_id)?;
+        let mut st = load_member(&env, circle_id, &member)?;
+        let x = st.claimable;
+        if x == 0 {
+            return Err(Error::NothingToClaim);
+        }
+        st.claimable = 0;
+        st.total_claimed = add(st.total_claimed, x);
+        save_member(&env, circle_id, &member, &st);
+        bump_circle(&env, &circle, false);
+
+        token::TokenClient::new(&env, &circle.token).transfer(
+            &env.current_contract_address(),
+            &member,
+            &x,
+        );
+        Claimed {
+            circle_id,
+            member,
+            amount: x,
+        }
+        .publish(&env);
+        Ok(x)
     }
 
     // ------------------------------------------------------------ views

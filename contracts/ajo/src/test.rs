@@ -86,6 +86,64 @@ fn set_time(s: &Setup, t: u64) {
     s.env.ledger().set_timestamp(t);
 }
 
+fn states(s: &Setup, id: u32) -> std::vec::Vec<MemberState> {
+    let circle = s.client.get_circle(&id);
+    circle
+        .members
+        .iter()
+        .map(|m| s.client.get_member_state(&id, &m))
+        .collect()
+}
+
+/// I1-I3 (and I4 once settle releases collateral). Call after every
+/// contract call.
+pub(crate) fn check_invariants(s: &Setup, ids: &[u32]) {
+    let mut held_total = 0i128;
+    for &id in ids {
+        let circle = s.client.get_circle(&id);
+        let sts = states(s, id);
+        let sum = |f: &dyn Fn(&MemberState) -> i128| sts.iter().map(f).sum::<i128>();
+        let coll = sum(&|m| m.collateral);
+        let claimable = sum(&|m| m.claimable);
+        held_total += circle.pot + coll + claimable;
+        // I2 conservation (per circle)
+        assert_eq!(
+            sum(&|m| m.total_in),
+            sum(&|m| m.total_credited) + circle.pot + coll,
+            "I2: total_in == credited + pot + collateral"
+        );
+        assert_eq!(
+            sum(&|m| m.total_credited),
+            sum(&|m| m.claimable + m.total_claimed),
+            "I2: credited == claimable + claimed"
+        );
+        // I3 non-negative
+        assert!(circle.pot >= 0);
+        for m in &sts {
+            assert!(m.collateral >= 0 && m.claimable >= 0, "I3");
+            for d in m.debts.iter() {
+                assert!(d.amount >= 0, "I3 debt");
+            }
+        }
+    }
+    // I1 solvency
+    assert_eq!(s.token.balance(&s.contract), held_total, "I1 solvency");
+}
+
+pub(crate) fn claim_all(s: &Setup, id: u32) {
+    for m in s.client.get_circle(&id).members.iter() {
+        if s.client.get_member_state(&id, &m).claimable > 0 {
+            s.client.claim(&id, &m);
+            check_invariants(s, &[id]);
+        }
+    }
+}
+
+/// Token balance change since setup.
+fn net(s: &Setup, i: u32) -> i128 {
+    s.token.balance(&mem(s, i)) - s.start
+}
+
 // ------------------------------------------------------- C1: create/pinning
 
 #[test]
@@ -95,6 +153,7 @@ fn token_is_pinned() {
     assert_eq!(s.client.token(), s.token.address);
     let id = create(&s);
     assert_eq!(s.client.get_circle(&id).token, s.token.address);
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -115,6 +174,7 @@ fn min_period_enforced() {
         .client
         .create_circle(&s.admin, &C, &s.members, &MIN_PERIOD_SECS, &MIN_PERIOD_SECS);
     assert_eq!(s.client.get_circle(&id).period_secs, MIN_PERIOD_SECS);
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -221,6 +281,7 @@ fn invalid_create_params() {
         Err(Ok(Error::NotMember))
     );
     assert_eq!(s.client.try_get_circle(&7), Err(Ok(Error::CircleNotFound)));
+    check_invariants(&s, &[id]);
 }
 
 // ------------------------------------------- C2: consent, forming, cancel
@@ -234,6 +295,7 @@ fn create_requires_admin_auth_only() {
     assert_eq!(auths.len(), 1);
     assert_eq!(auths[0].0, s.admin);
     assert_eq!(s.client.get_circle(&id).accepted, 0);
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -282,6 +344,7 @@ fn accept_requires_member_auth() {
     assert_eq!(st.total_in, 2 * C);
     assert_eq!(s.token.balance(&s.contract), 2 * C);
     assert_eq!(s.token.balance(&a), s.start - 2 * C);
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -310,6 +373,7 @@ fn activates_when_all_accept() {
         s.client.get_round_status(&id, &0).deadline,
         T0 + 100 + PERIOD
     );
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -325,6 +389,7 @@ fn contribute_before_active_rejected() {
         s.client.try_post_collateral(&id, &mem(&s, 0), &C),
         Err(Ok(Error::NotActive))
     );
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -337,6 +402,7 @@ fn accept_twice_rejected() {
         Err(Ok(Error::AlreadyAccepted))
     );
     assert_eq!(state(&s, id, 1).collateral, C);
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -350,6 +416,7 @@ fn accept_after_window_rejected() {
         s.client.try_accept(&id, &mem(&s, 1), &0),
         Err(Ok(Error::JoinWindowClosed))
     );
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -374,6 +441,7 @@ fn non_member_accept_rejected() {
         s.client.try_contribute(&id2, &outsider),
         Err(Ok(Error::NotMember))
     );
+    check_invariants(&s, &[id, id2]);
 }
 
 #[test]
@@ -427,6 +495,7 @@ fn collateral_validation() {
             .try_post_collateral(&id, &Address::generate(&s.env), &C),
         Err(Ok(Error::NotMember))
     );
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -453,6 +522,7 @@ fn post_collateral_cap_after_receiving_is_need() {
         s.client.try_post_collateral(&id, &a, &C),
         Err(Ok(Error::InvalidCollateral))
     );
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -483,6 +553,7 @@ fn cancel_refunds_collateral() {
         s.client.try_contribute(&id, &mem(&s, 0)),
         Err(Ok(Error::CircleClosed))
     );
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -491,6 +562,7 @@ fn cancel_not_allowed_once_all_accepted() {
     let id = start(&s, &[0, 0]);
     set_time(&s, T0 + JOIN + 1);
     assert_eq!(s.client.try_cancel(&id), Err(Ok(Error::NotForming)));
+    check_invariants(&s, &[id]);
 }
 
 #[test]
@@ -507,4 +579,70 @@ fn duplicate_contribution_rejected() {
     assert_eq!(s.token.balance(&s.contract), C);
     assert_eq!(state(&s, id, 0).paid, 1);
     assert_eq!(state(&s, id, 0).total_in, C);
+    check_invariants(&s, &[id]);
+}
+
+// ------------------------------------------------------------ C3: claims
+
+#[test]
+fn claim_nothing() {
+    let s = setup_n(3);
+    let id = start(&s, &[0, 0, 0]);
+    assert_eq!(
+        s.client.try_claim(&id, &mem(&s, 0)),
+        Err(Ok(Error::NothingToClaim))
+    );
+    assert_eq!(
+        s.client.try_claim(&id, &Address::generate(&s.env)),
+        Err(Ok(Error::NotMember))
+    );
+    check_invariants(&s, &[id]);
+}
+
+#[test]
+fn claim_requires_auth() {
+    let s = setup_n(2);
+    let id = create(&s);
+    s.client.accept(&id, &mem(&s, 0), &C);
+    set_time(&s, T0 + JOIN + 1);
+    s.client.cancel(&id);
+    // without auth mocks a stranger cannot claim A's refund
+    s.env.set_auths(&[]);
+    assert!(s.client.try_claim(&id, &mem(&s, 0)).is_err());
+    assert_eq!(state(&s, id, 0).claimable, C);
+    // with A's auth the claim goes to A
+    s.env.mock_all_auths();
+    assert_eq!(s.client.claim(&id, &mem(&s, 0)), C);
+    assert_eq!(s.env.auths()[0].0, mem(&s, 0));
+    check_invariants(&s, &[id]);
+}
+
+#[test]
+fn claim_after_completed_and_cancelled() {
+    let s = setup_n(2);
+    // cancelled circle
+    let cid = create(&s);
+    s.client.accept(&cid, &mem(&s, 0), &C);
+    set_time(&s, T0 + JOIN + 1);
+    s.client.cancel(&cid);
+    check_invariants(&s, &[cid]);
+    claim_all(&s, cid);
+    assert_eq!(s.client.get_circle(&cid).status, CircleStatus::Cancelled);
+    assert_eq!(net(&s, 0), 0);
+    let st = state(&s, cid, 0);
+    assert_eq!((st.claimable, st.total_claimed), (0, C));
+
+    // completed circle
+    let id = start(&s, &[0, 0]);
+    for _ in 0..2 {
+        s.client.contribute(&id, &mem(&s, 0));
+        s.client.contribute(&id, &mem(&s, 1));
+        s.client.payout(&id);
+        check_invariants(&s, &[cid, id]);
+    }
+    assert_eq!(s.client.get_circle(&id).status, CircleStatus::Completed);
+    claim_all(&s, id);
+    check_invariants(&s, &[cid, id]);
+    assert_eq!((net(&s, 0), net(&s, 1)), (0, 0));
+    assert_eq!(s.token.balance(&s.contract), 0);
 }
