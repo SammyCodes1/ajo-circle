@@ -40,6 +40,12 @@ export function CircleCard({ c, mine }: { c: Circle; mine: boolean }) {
             <Pill tone="sage" dot>
               Completed
             </Pill>
+          ) : c.status === "Forming" ? (
+            <Pill tone="ochre" dot>
+              Joining · {c.accepted}/{n}
+            </Pill>
+          ) : c.status === "Cancelled" ? (
+            <Pill tone="neutral">Cancelled</Pill>
           ) : (
             <Pill tone="neutral">
               Round {c.round + 1} of {n}
@@ -55,10 +61,14 @@ export function CircleCard({ c, mine }: { c: Circle; mine: boolean }) {
         per member · every {formatDuration(Number(c.period_secs))} · {n} members
       </p>
       <div className="mt-6">
-        <RoundsBar total={n} current={c.round} done={done} />
+        <RoundsBar total={n} current={c.status === "Active" ? c.round : -1} done={done} />
         <div className="mt-2.5 flex items-center justify-between text-xs text-muted">
           {done ? (
-            <span>All {n} pots paid out</span>
+            <span>All {n} rounds settled</span>
+          ) : c.status === "Forming" ? (
+            <span>Waiting for members to accept</span>
+          ) : c.status === "Cancelled" ? (
+            <span>Refunds claimable</span>
           ) : (
             <span className="tnum">
               {c.paid.length}/{n} paid · pot {formatAmount(c.pot)} {config.tokenCode}
