@@ -392,3 +392,56 @@ fn model_port_matches_scenarios() {
     let pays = vec![t(&[tt, tt, tt]), t(&[tt, tt, tt]), t(&[ff, ff, ff])];
     assert_eq!(model_run(3, 10, &pays, &[20, 10, 0]).0, vec![0, 0, 0]);
 }
+
+#[test]
+fn prop_unwind_conserves() {
+    for_cases("prop_unwind_conserves", |seed, case, rng| {
+        let (s, id) = new_circle(case);
+        let stop = rng.below(case.n as u64) as usize;
+        for r in 0..case.n {
+            contribute_round(&s, id, case, r, false);
+            if r == stop {
+                break;
+            }
+            if (0..case.n).any(|m| !case.pays[m][r]) {
+                let dl = s.client.get_circle(&id).round_start + PERIOD;
+                s.env.ledger().set_timestamp(dl);
+            }
+            s.client.settle(&id);
+        }
+        check_all(&s, id);
+        let circle = s.client.get_circle(&id);
+        let grace = circle.round_start + PERIOD * (1 + crate::UNWIND_GRACE_PERIODS);
+        s.env.ledger().set_timestamp(grace);
+        let mut h = circle.pot;
+        let mut before = 0i128;
+        let mut d_total = 0i128;
+        for m in s.members.iter() {
+            let st = s.client.get_member_state(&id, &m);
+            h += st.collateral;
+            before += st.claimable;
+            d_total += (st.total_in - st.total_credited).max(0);
+        }
+        // the D == 0 fallback (all to slot 0) is unreachable when H > 0
+        assert!(h == 0 || d_total > 0, "seed {seed}: H > 0 with D == 0");
+        s.client.unwind(&id);
+        check_invariants(&s, &[id]);
+        let after: i128 = s
+            .members
+            .iter()
+            .map(|m| s.client.get_member_state(&id, &m).claimable)
+            .sum();
+        assert_eq!(after - before, h, "seed {seed}: shares != H");
+        claim_all(&s, id);
+        assert_eq!(s.token.balance(&s.contract), 0, "seed {seed}");
+        for m in 0..case.n {
+            let net = s.token.balance(&s.members.get(m as u32).unwrap()) - s.start;
+            if case.honest[m] {
+                assert!(
+                    net >= 0,
+                    "seed {seed}: honest {m} net {net} after unwind at {stop}"
+                );
+            }
+        }
+    });
+}

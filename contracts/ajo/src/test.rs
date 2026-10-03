@@ -1208,3 +1208,103 @@ fn ttl_bumped_on_settle() {
         assert_eq!(s.env.storage().instance().get_ttl(), INSTANCE_EXTEND_TO);
     });
 }
+
+// ------------------------------------------------------------ C6: unwind
+
+fn grace_end(s: &Setup, id: u32) -> u64 {
+    s.client.get_circle(&id).round_start + PERIOD * (1 + UNWIND_GRACE_PERIODS)
+}
+
+/// Unwinds and returns (H, Σ shares credited by the unwind).
+fn do_unwind(s: &Setup, id: u32) -> (i128, i128) {
+    let circle = s.client.get_circle(&id);
+    let before = states(s, id);
+    let h = circle.pot + before.iter().map(|m| m.collateral).sum::<i128>();
+    s.client.unwind(&id);
+    check_invariants(s, &[id]);
+    let after = states(s, id);
+    let shares = after
+        .iter()
+        .zip(before.iter())
+        .map(|(a, b)| a.claimable - b.claimable)
+        .sum::<i128>();
+    assert_eq!(s.client.get_circle(&id).status, CircleStatus::Cancelled);
+    assert!(after.iter().all(|m| m.collateral == 0));
+    (h, shares)
+}
+
+#[test]
+fn unwind_not_before_grace() {
+    let s = setup_n(3);
+    let id = start(&s, &units(&[2, 1, 0]));
+    s.client.contribute(&id, &mem(&s, 0));
+    let deadline = s.client.get_round_status(&id, &0).deadline;
+    set_time(&s, deadline + PERIOD * 2 - 1);
+    assert_eq!(s.client.try_unwind(&id), Err(Ok(Error::UnwindNotAllowed)));
+    assert_eq!(grace_end(&s, id), deadline + PERIOD * 2);
+    set_time(&s, deadline + PERIOD * 2);
+    s.env.set_auths(&[]); // anyone, no auth
+    s.client.unwind(&id);
+    s.env.mock_all_auths();
+    check_invariants(&s, &[id]);
+    assert_eq!(s.client.try_unwind(&id), Err(Ok(Error::NotActive)));
+    let forming = create(&s);
+    assert_eq!(s.client.try_unwind(&forming), Err(Ok(Error::NotActive)));
+}
+
+#[test]
+fn unwind_mid_circle_all_honest() {
+    let s = setup_n(3);
+    let id = start(&s, &units(&[2, 1, 0]));
+    play_round(&s, id, &[T, T, T]);
+    // r1: contributions in, nobody settles
+    for i in 0..3 {
+        s.client.contribute(&id, &mem(&s, i));
+    }
+    set_time(&s, grace_end(&s, id));
+    let (h, shares) = do_unwind(&s, id);
+    assert_eq!(h, shares);
+    claim_all(&s, id);
+    assert_eq!(nets(&s), [0, 0, 0]);
+    assert_eq!(s.token.balance(&s.contract), 0);
+}
+
+#[test]
+fn unwind_after_walkaway() {
+    let s = setup_n(3);
+    let id = start(&s, &[0, 0, 0]);
+    play_round(&s, id, &[T, T, T]); // A received, 2c withheld
+    s.client.contribute(&id, &mem(&s, 1));
+    s.client.contribute(&id, &mem(&s, 2));
+    set_time(&s, grace_end(&s, id));
+    let (h, shares) = do_unwind(&s, id);
+    assert_eq!(h, shares);
+    claim_all(&s, id);
+    assert_eq!(s.token.balance(&s.contract), 0);
+    let n = nets(&s);
+    // B and C paid every round they could
+    assert!(n[1] >= 0 && n[2] >= 0, "{n:?}");
+    assert_eq!(n.iter().sum::<i128>(), 0);
+}
+
+#[test]
+fn settle_still_possible_until_unwind() {
+    let s = setup_n(3);
+    let id = start(&s, &[0, 0, 0]);
+    s.client.contribute(&id, &mem(&s, 0));
+    // settle allowed any time after the deadline, even inside the grace window
+    set_time(&s, grace_end(&s, id) - 1);
+    s.client.settle(&id);
+    check_invariants(&s, &[id]);
+    // next round: wait past its grace, then unwind; settle is closed after
+    set_time(&s, grace_end(&s, id));
+    s.client.unwind(&id);
+    check_invariants(&s, &[id]);
+    assert_eq!(s.client.try_settle(&id), Err(Ok(Error::CircleClosed)));
+    assert_eq!(
+        s.client.try_contribute(&id, &mem(&s, 1)),
+        Err(Ok(Error::CircleClosed))
+    );
+    claim_all(&s, id);
+    assert_eq!(s.token.balance(&s.contract), 0);
+}

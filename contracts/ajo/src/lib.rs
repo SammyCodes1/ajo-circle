@@ -364,6 +364,14 @@ pub struct CircleCancelled {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CircleUnwound {
+    #[topic]
+    pub circle_id: u32,
+    pub total: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CircleCompleted {
     #[topic]
     pub circle_id: u32,
@@ -1061,6 +1069,86 @@ impl AjoContract {
     /// Alias of `settle` (UI compatibility).
     pub fn payout(env: Env, circle_id: u32) -> Result<i128, Error> {
         Self::settle(env, circle_id)
+    }
+
+    /// Emergency exit (anyone): if the current round has not been settled
+    /// within `UNWIND_GRACE_PERIODS` periods after its deadline, everything
+    /// the circle still holds (`pot + all collateral`) is refunded pro rata
+    /// to each member's deficit `total_in - total_credited`, floor division,
+    /// dust to the lowest slot with a deficit. Open debts become void. The
+    /// circle ends as Cancelled; refunds are claimable.
+    pub fn unwind(env: Env, circle_id: u32) -> Result<(), Error> {
+        let mut circle = load_circle(&env, circle_id)?;
+        if circle.status != CircleStatus::Active {
+            return Err(Error::NotActive);
+        }
+        let grace_end = circle
+            .round_start
+            .saturating_add(circle.period_secs.saturating_mul(1 + UNWIND_GRACE_PERIODS));
+        if env.ledger().timestamp() < grace_end {
+            return Err(Error::UnwindNotAllowed);
+        }
+        let n = circle.members.len();
+        let mut sts: Vec<MemberState> = Vec::new(&env);
+        let mut h = circle.pot;
+        for m in circle.members.iter() {
+            let mut st = load_member(&env, circle_id, &m)?;
+            h = add(h, st.collateral);
+            st.collateral = 0;
+            sts.push_back(st);
+        }
+        circle.pot = 0;
+
+        let mut deficits: Vec<i128> = Vec::new(&env);
+        let mut d_total = 0i128;
+        for st in sts.iter() {
+            let d = sub(st.total_in, st.total_credited);
+            let d = if d > 0 { d } else { 0 };
+            d_total = add(d_total, d);
+            deficits.push_back(d);
+        }
+        let mut distributed = 0i128;
+        let mut dust_slot: Option<u32> = None;
+        for slot in 0..n {
+            let d = deficits.get_unchecked(slot);
+            if d_total == 0 || d == 0 {
+                continue;
+            }
+            if dust_slot.is_none() {
+                dust_slot = Some(slot);
+            }
+            let share = mul(h, d) / d_total;
+            distributed = add(distributed, share);
+            let mut st = sts.get_unchecked(slot);
+            credit_raw(&mut st, share);
+            sts.set(slot, st);
+        }
+        let dust = sub(h, distributed);
+        if dust > 0 {
+            // D == 0 is unreachable in practice; then everything goes to slot 0.
+            let slot = dust_slot.unwrap_or(0);
+            let mut st = sts.get_unchecked(slot);
+            credit_raw(&mut st, dust);
+            sts.set(slot, st);
+        }
+
+        circle.status = CircleStatus::Cancelled;
+        for slot in 0..n {
+            save_member(
+                &env,
+                circle_id,
+                &circle.members.get_unchecked(slot),
+                &sts.get_unchecked(slot),
+            );
+        }
+        save_circle(&env, &circle);
+        bump_circle(&env, &circle, true);
+        CircleUnwound {
+            circle_id,
+            total: h,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     /// Withdraw everything claimable (member auth). The only outgoing
