@@ -158,7 +158,7 @@ cd web && cp .env.example .env.local && npm install && npm run dev
 ./scripts/fund-test-usdc.sh G...YOUR_FREIGHTER_ADDRESS 500
 ```
 
-> The test-USDC issuer key lives only in the stellar CLI keystore of the machine that ran the deploy script (`~/.config/stellar` or `%APPDATA%\stellar`… see `stellar keys ls`). `fund-test-usdc` must run on that machine. To use the IDs in this README you need the original deployer to fund you, or run your own deploy and update `web/.env.local`.
+> The test-USDC issuer key lives only in the stellar CLI config of the machine that ran the deploy script (default `~/.config/stellar`; list identities with `stellar keys ls`). `fund-test-usdc` must run on that machine. To use the IDs in this README you need the original deployer to fund you, or run your own deploy and update `web/.env.local`.
 
 ## Demo walkthrough (≈3 min)
 
