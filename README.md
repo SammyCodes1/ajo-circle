@@ -17,7 +17,10 @@ Built for the Stellar **"Find Your Way"** hackathon (General Track).
 <p>
   <img src="docs/screenshots/mobile-home.png" alt="Mobile home" width="260" />
   <img src="docs/screenshots/mobile-circle-0.png" alt="Mobile circle dashboard" width="260" />
+  <img src="docs/screenshots/mobile-create.png" alt="Mobile create form" width="260" />
 </p>
+
+Responsive from 320 px phones to desktop: bottom tab bar on phones, actions before history on the dashboard, card lists instead of tables, ≥ 44 px tap targets and ≥ 12 px text (checked with a headless-Chrome audit at 320/360/390/430/768/1024/1280 px — no horizontal overflow on any page).
 
 Design: warm paper palette with a clay accent and adire-indigo pattern (a nod to Yoruba resist-dyed cloth), Fraunces for headings and numbers, Inter Tight for UI, JetBrains Mono for addresses. The circle dashboard draws the group as a ring: members in payout order, the current recipient in clay, paid / already-received / defaulted marks on each seat.
 
