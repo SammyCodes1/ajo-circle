@@ -7,8 +7,10 @@ import { missingConfig } from "@/lib/config";
 export function Banners() {
   const w = useWallet();
   const missing = missingConfig();
-  const readOnly = w.ready && !w.address;
-  if (!(missing.length > 0 || readOnly || w.wrongNetwork || w.error)) return null;
+  const readOnly = w.ready && !w.address && !w.needsWalletConnect;
+  const wcNote = !w.address && w.needsWalletConnect;
+  const showError = w.error && !(wcNote && /WalletConnect/.test(w.error));
+  if (!(missing.length > 0 || readOnly || wcNote || w.wrongNetwork || showError)) return null;
   return (
     <div className="mx-auto w-full max-w-6xl space-y-2 px-4 pt-4 sm:px-8">
       {missing.length > 0 && (
@@ -30,13 +32,30 @@ export function Banners() {
           — Freighter, xBull, LOBSTR and more, or Albedo right in the browser with nothing to install.
         </Alert>
       )}
+      {wcNote && (
+        <Alert tone="info" title="You’re in Freighter’s in-app browser">
+          Freighter mobile connects to web apps through WalletConnect, which this deployment hasn’t enabled yet, so
+          it can’t sign here. You can still connect with Albedo (works in any browser), or open Ajo Circle on a
+          computer with the Freighter extension.
+          <span className="mt-2.5 flex">
+            <button
+              type="button"
+              onClick={() => w.connectWith("albedo")}
+              disabled={w.connecting}
+              className="press inline-flex min-h-11 items-center rounded-lg border border-line-strong bg-ivory px-4 text-sm font-medium text-ink hover:bg-white disabled:text-muted"
+            >
+              {w.connecting ? "Opening Albedo…" : "Connect with Albedo"}
+            </button>
+          </span>
+        </Alert>
+      )}
       {w.wrongNetwork && (
         <Alert tone="error" title="Wrong network">
           {w.walletName ?? "Your wallet"} is on <b>{w.network}</b>. Ajo Circle runs on Stellar <b>Testnet</b> — switch
           networks in your wallet&apos;s settings.
         </Alert>
       )}
-      {w.error && <Alert tone="error">{w.error}</Alert>}
+      {showError && <Alert tone="error">{w.error}</Alert>}
     </div>
   );
 }

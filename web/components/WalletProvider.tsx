@@ -1,7 +1,16 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { config } from "@/lib/config";
-import { kitError, loadWalletKit, WALLET_NAMES, type WalletKit } from "@/lib/walletKit";
+import {
+  inFreighterMobile,
+  kitError,
+  loadWalletKit,
+  WALLET_NAMES,
+  walletBrowser,
+  walletConnectProjectId,
+  type WalletBrowser,
+  type WalletKit,
+} from "@/lib/walletKit";
 
 interface WalletState {
   /** true once we know whether a previous session exists (avoids header flicker). */
@@ -16,7 +25,13 @@ interface WalletState {
   connecting: boolean;
   error: string | null;
   connect: () => Promise<void>;
+  /** Connect a specific kit module directly (e.g. "albedo"), bypassing the picker. */
+  connectWith: (id: string) => Promise<void>;
   disconnect: () => Promise<void>;
+  /** Set when the page runs inside a wallet's in-app browser (e.g. Freighter mobile). */
+  inAppBrowser: WalletBrowser | null;
+  /** Freighter mobile's browser only connects via WalletConnect, which isn't configured here. */
+  needsWalletConnect: boolean;
 }
 
 const WalletContext = createContext<WalletState | null>(null);
@@ -41,6 +56,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const kitRef = useRef<WalletKit | null>(null);
+  const [inAppBrowser, setInAppBrowser] = useState<WalletBrowser | null>(null);
+  const needsWalletConnect = !!inAppBrowser && inAppBrowser.provider === "freighter" && !walletConnectProjectId;
+
+  // Detect wallet in-app browsers on the client (the marker is injected before page scripts run).
+  useEffect(() => {
+    setInAppBrowser(walletBrowser());
+  }, []);
 
   /** Ask the wallet which network it is on. Most wallets (all but Freighter) don't say: degrade to null. */
   const refreshNetwork = useCallback(async (kit: WalletKit) => {
@@ -100,6 +122,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const connect = useCallback(async () => {
     setError(null);
+    if (inFreighterMobile() && !walletConnectProjectId) {
+      // The kit would list Freighter as "not installed" here; explain instead (see Banners).
+      setError("Freighter mobile connects through WalletConnect, which isn't enabled on this site yet.");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
     setConnecting(true);
     try {
       const kit = await loadWalletKit();
@@ -117,6 +145,27 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, [refreshNetwork]);
 
+  const connectWith = useCallback(
+    async (id: string) => {
+      setError(null);
+      setConnecting(true);
+      try {
+        const kit = await loadWalletKit();
+        kitRef.current = kit;
+        kit.setWallet(id);
+        const { address: a } = await kit.fetchAddress();
+        setAddress(a);
+        setWalletId(selectedId(kit));
+        await refreshNetwork(kit);
+      } catch (e) {
+        setError(kitError(e).message);
+      } finally {
+        setConnecting(false);
+      }
+    },
+    [refreshNetwork],
+  );
+
   const disconnect = useCallback(async () => {
     try {
       await (kitRef.current ?? (await loadWalletKit())).disconnect();
@@ -133,16 +182,36 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       ready,
       address,
       walletId,
-      walletName: walletId ? (WALLET_NAMES[walletId] ?? walletId) : null,
+      walletName: walletId
+        ? walletId === "wallet_connect" && inAppBrowser?.provider === "freighter"
+          ? "Freighter"
+          : (WALLET_NAMES[walletId] ?? walletId)
+        : null,
       network,
       networkPassphrase,
       wrongNetwork: !!networkPassphrase && networkPassphrase !== config.networkPassphrase,
       connecting,
       error,
       connect,
+      connectWith,
       disconnect,
+      inAppBrowser,
+      needsWalletConnect,
     }),
-    [ready, address, walletId, network, networkPassphrase, connecting, error, connect, disconnect],
+    [
+      ready,
+      address,
+      walletId,
+      network,
+      networkPassphrase,
+      connecting,
+      error,
+      connect,
+      connectWith,
+      disconnect,
+      inAppBrowser,
+      needsWalletConnect,
+    ],
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;

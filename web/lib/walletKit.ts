@@ -32,6 +32,28 @@ export const kitTheme: SwkAppTheme = {
   "font-family": "var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif",
 };
 
+/**
+ * Wallet in-app (dApp) browsers announce themselves with an injected marker object.
+ * Freighter mobile injects exactly `window.stellar = { provider: "freighter", platform: "mobile", version }`
+ * and nothing else — no signing API. It talks to dApps only through WalletConnect.
+ * (stellar/freighter-mobile: src/components/screens/DiscoveryScreen/components/WebViewContainer.tsx)
+ */
+export type WalletBrowser = { provider: string; platform: string; version?: string };
+
+export function walletBrowser(): WalletBrowser | null {
+  if (typeof window === "undefined") return null;
+  const s = (window as unknown as { stellar?: Partial<WalletBrowser> }).stellar;
+  if (s && typeof s.provider === "string" && s.platform === "mobile")
+    return { provider: s.provider, platform: s.platform, version: s.version };
+  // Fallback: Freighter mobile's WebView user agent ends with "FreighterMobile/<version>".
+  const ua = /FreighterMobile\/([\w.]+)/.exec(navigator.userAgent);
+  return ua ? { provider: "freighter", platform: "mobile", version: ua[1] } : null;
+}
+
+export function inFreighterMobile(): boolean {
+  return walletBrowser()?.provider === "freighter";
+}
+
 let kitPromise: Promise<WalletKit> | null = null;
 
 export function loadWalletKit(): Promise<WalletKit> {
@@ -46,20 +68,28 @@ export function loadWalletKit(): Promise<WalletKit> {
       import("@creit.tech/stellar-wallets-kit/modules/hana"),
       import("@creit.tech/stellar-wallets-kit/modules/rabet"),
     ]);
+    const inApp = walletBrowser();
     // Order = order in the picker (installed wallets first, then the rest).
-    const modules: ModuleInterface[] = [
-      new freighter.FreighterModule(),
-      new albedo.AlbedoModule(),
-      new xbull.xBullModule(),
-      new lobstr.LobstrModule(),
-      new hana.HanaModule(),
-      new rabet.RabetModule(),
-    ];
+    // Inside a wallet's in-app browser, browser extensions can never be installed, so only
+    // offer wallets that work there (WalletConnect wrapper, Albedo web, xBull PWA) and
+    // never show "Install" prompts.
+    const modules: ModuleInterface[] = inApp
+      ? [new albedo.AlbedoModule(), new xbull.xBullModule()]
+      : [
+          new freighter.FreighterModule(),
+          new albedo.AlbedoModule(),
+          new xbull.xBullModule(),
+          new lobstr.LobstrModule(),
+          new hana.HanaModule(),
+          new rabet.RabetModule(),
+        ];
     if (walletConnectProjectId) {
       // Aliased to a no-op stub in next.config.ts when no project id is configured,
       // so the (large) WalletConnect/Reown dependency tree is never bundled.
       const wc = await import("@creit.tech/stellar-wallets-kit/modules/wallet-connect");
-      modules.push(
+      // Inside Freighter mobile the kit treats WalletConnect as the "platform wrapper"
+      // and connects through it automatically when the picker opens.
+      modules[inApp ? "unshift" : "push"](
         new wc.WalletConnectModule({
           projectId: walletConnectProjectId,
           metadata: {
@@ -76,7 +106,7 @@ export function loadWalletKit(): Promise<WalletKit> {
       modules,
       network: config.networkPassphrase as Networks,
       theme: kitTheme,
-      authModal: { showInstallLabel: true, hideUnsupportedWallets: false },
+      authModal: { showInstallLabel: !inApp, hideUnsupportedWallets: !!inApp },
     });
     return StellarWalletsKit;
   })();
