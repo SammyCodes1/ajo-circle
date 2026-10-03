@@ -278,13 +278,70 @@ pub struct Contributed {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DefaultCovered {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub member: Address,
+    pub round: u32,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebtCreated {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub debtor: Address,
+    pub creditor: Address,
+    pub round: u32,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebtRepaid {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub debtor: Address,
+    pub creditor: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CollateralWithheld {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub member: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CollateralReleased {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub member: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaidOut {
     #[topic]
     pub circle_id: u32,
     #[topic]
     pub recipient: Address,
     pub round: u32,
-    pub amount: i128,
+    pub gross: i128,
+    pub to_debts: i128,
+    pub withheld: i128,
+    pub to_claimable: i128,
     pub defaulted: Vec<Address>,
 }
 
@@ -316,6 +373,10 @@ pub struct CircleCompleted {
 
 fn add(a: i128, b: i128) -> i128 {
     a.checked_add(b).expect("overflow")
+}
+
+fn sub(a: i128, b: i128) -> i128 {
+    a.checked_sub(b).expect("overflow")
 }
 
 fn mul(a: i128, b: i128) -> i128 {
@@ -419,6 +480,105 @@ fn need(st: &MemberState, c: i128, n: u32, r: u32) -> i128 {
 fn credit_raw(st: &mut MemberState, amount: i128) {
     st.claimable = add(st.claimable, amount);
     st.total_credited = add(st.total_credited, amount);
+}
+
+fn open_debt_total(st: &MemberState) -> i128 {
+    let mut t = 0i128;
+    for d in st.debts.iter() {
+        t = add(t, d.amount);
+    }
+    t
+}
+
+/// The credit pipeline (M2). Every inflow to a member runs:
+/// (1) repay own debts FIFO (each repayment is an inflow to the creditor),
+/// (2) top up collateral to `need(m, r)`, (3) the rest goes to claimable.
+/// Iterative DFS with a step cap. Returns `(to_debts, withheld, to_claimable)`
+/// of the FIRST frame (the target's own split).
+fn credit(
+    env: &Env,
+    circle: &Circle,
+    sts: &mut Vec<MemberState>,
+    target: u32,
+    amount: i128,
+    r: u32,
+) -> Result<(i128, i128, i128), Error> {
+    let c = circle.contribution;
+    let n = circle.members.len();
+    let mut stack: Vec<(u32, i128)> = Vec::new(env);
+    stack.push_back((target, amount));
+    let mut steps = 0u32;
+    let mut first = true;
+    let mut split = (0i128, 0i128, 0i128);
+    while let Some((slot, mut amt)) = stack.pop_back() {
+        steps += 1;
+        if steps > MAX_CREDIT_STEPS {
+            return Err(Error::CreditLoop);
+        }
+        let member = circle.members.get_unchecked(slot);
+        let mut st = sts.get_unchecked(slot);
+        // Creditor frames are pushed in reverse so that they pop in FIFO
+        // order after this frame completes (DFS, like the recursive model).
+        let mut pushes: Vec<(u32, i128)> = Vec::new(env);
+        let mut to_debts = 0i128;
+        // (1) own debts, FIFO
+        for i in 0..st.debts.len() {
+            if amt == 0 {
+                break;
+            }
+            let mut d = st.debts.get_unchecked(i);
+            if d.amount == 0 {
+                continue;
+            }
+            let pay = if amt < d.amount { amt } else { d.amount };
+            d.amount = sub(d.amount, pay);
+            amt = sub(amt, pay);
+            to_debts = add(to_debts, pay);
+            st.debts.set(i, d.clone());
+            DebtRepaid {
+                circle_id: circle.id,
+                debtor: member.clone(),
+                creditor: d.creditor.clone(),
+                amount: pay,
+            }
+            .publish(env);
+            let cslot = circle
+                .members
+                .first_index_of(&d.creditor)
+                .expect("creditor is a member");
+            pushes.push_front((cslot, pay));
+        }
+        // (2) top up collateral
+        let gap = sub(need(&st, c, n, r), st.collateral);
+        let w = if gap <= 0 {
+            0
+        } else if amt < gap {
+            amt
+        } else {
+            gap
+        };
+        st.collateral = add(st.collateral, w);
+        amt = sub(amt, w);
+        if w > 0 {
+            CollateralWithheld {
+                circle_id: circle.id,
+                member: member.clone(),
+                amount: w,
+            }
+            .publish(env);
+        }
+        // (3) claimable
+        credit_raw(&mut st, amt);
+        sts.set(slot, st);
+        if first {
+            split = (to_debts, w, amt);
+            first = false;
+        }
+        for p in pushes.iter() {
+            stack.push_back(p);
+        }
+    }
+    Ok(split)
 }
 
 fn valid_collateral_amount(amount: i128, c: i128) -> bool {
@@ -729,10 +889,13 @@ impl AjoContract {
         Ok(())
     }
 
-    /// Settle the current round (interim: the whole pot is credited to the
-    /// recipient's claimable; collateral cover and debts come next).
-    /// Callable by anyone once every member has paid or the deadline passed.
-    pub fn payout(env: Env, circle_id: u32) -> Result<i128, Error> {
+    /// Settle the current round (anyone, no auth). Allowed once every
+    /// member has paid or the round deadline passed. Misses are covered from
+    /// the defaulter's collateral, the rest becomes a debt to this round's
+    /// recipient; the pot runs through the recipient's credit pipeline;
+    /// collateral above `need` is released. No token transfers happen here:
+    /// everything lands in `claimable`. Returns the gross pot.
+    pub fn settle(env: Env, circle_id: u32) -> Result<i128, Error> {
         let mut circle = load_circle(&env, circle_id)?;
         if circle.status != CircleStatus::Active {
             return Err(not_active(&circle));
@@ -740,69 +903,164 @@ impl AjoContract {
         if !is_ready(&env, &circle) {
             return Err(Error::PayoutNotReady);
         }
-
         let n = circle.members.len();
-        let round = circle.round;
-        let recipient = circle.members.get_unchecked(round);
-        let amount = circle.pot;
-        let defaulted = unpaid_members(&env, &circle);
-
-        for m in defaulted.iter() {
-            let mut st = load_member(&env, circle_id, &m)?;
-            st.missed += 1;
-            st.missed_rounds.push_back(round);
-            save_member(&env, circle_id, &m, &st);
+        let r = circle.round;
+        let c = circle.contribution;
+        let recipient = circle.members.get_unchecked(r);
+        let mut sts: Vec<MemberState> = Vec::new(&env);
+        for m in circle.members.iter() {
+            sts.push_back(load_member(&env, circle_id, &m)?);
         }
-        let mut rst = load_member(&env, circle_id, &recipient)?;
+
+        let mut covered = 0i128;
+        let mut created = 0i128;
+        let mut defaulted: Vec<Address> = Vec::new(&env);
+        for slot in 0..n {
+            let m = circle.members.get_unchecked(slot);
+            if circle.paid.contains(&m) {
+                continue;
+            }
+            let mut st = sts.get_unchecked(slot);
+            defaulted.push_back(m.clone());
+            st.missed += 1;
+            st.missed_rounds.push_back(r);
+            if slot != r {
+                // own contribution is simply absent from own pot
+                let take = if st.collateral < c { st.collateral } else { c };
+                st.collateral = sub(st.collateral, take);
+                circle.pot = add(circle.pot, take);
+                covered = add(covered, take);
+                let short = sub(c, take);
+                if short > 0 {
+                    st.debts.push_back(Debt {
+                        creditor: recipient.clone(),
+                        amount: short,
+                        round: r,
+                    });
+                    created = add(created, short);
+                    DebtCreated {
+                        circle_id,
+                        debtor: m.clone(),
+                        creditor: recipient.clone(),
+                        round: r,
+                        amount: short,
+                    }
+                    .publish(&env);
+                }
+                if take > 0 {
+                    DefaultCovered {
+                        circle_id,
+                        member: m.clone(),
+                        round: r,
+                        amount: take,
+                    }
+                    .publish(&env);
+                }
+            }
+            sts.set(slot, st);
+        }
+
+        let gross = circle.pot;
+        let mut rst = sts.get_unchecked(r);
         rst.received = true;
-        rst.received_gross = add(rst.received_gross, amount);
-        credit_raw(&mut rst, amount);
-        save_member(&env, circle_id, &recipient, &rst);
+        rst.received_gross = add(rst.received_gross, gross);
+        sts.set(r, rst);
+        let (to_debts, withheld, to_claim) = credit(&env, &circle, &mut sts, r, gross, r)?;
+
+        // declining release (M3)
+        for slot in 0..n {
+            let mut st = sts.get_unchecked(slot);
+            if st.received && open_debt_total(&st) == 0 {
+                let ex = sub(st.collateral, need(&st, c, n, r));
+                if ex > 0 {
+                    st.collateral = sub(st.collateral, ex);
+                    credit_raw(&mut st, ex);
+                    sts.set(slot, st);
+                    CollateralReleased {
+                        circle_id,
+                        member: circle.members.get_unchecked(slot),
+                        amount: ex,
+                    }
+                    .publish(&env);
+                }
+            }
+        }
 
         let settled = RoundStatus {
             circle_id,
-            round,
+            round: r,
             recipient: recipient.clone(),
             deadline: deadline(&circle),
             paid: circle.paid.clone(),
             unpaid: defaulted.clone(),
             defaulted: defaulted.clone(),
-            pot: amount,
+            pot: gross,
             settled: true,
             payout_ready: false,
-            covered_from_collateral: 0,
-            debts_created: 0,
-            to_debts: 0,
-            withheld: 0,
-            to_claimable: amount,
+            covered_from_collateral: covered,
+            debts_created: created,
+            to_debts,
+            withheld,
+            to_claimable: to_claim,
         };
         env.storage()
             .persistent()
-            .set(&DataKey::Round(circle_id, round), &settled);
+            .set(&DataKey::Round(circle_id, r), &settled);
 
-        let now = env.ledger().timestamp();
-        circle.round = round + 1;
-        circle.round_start = now;
+        circle.round = r + 1;
+        circle.round_start = env.ledger().timestamp();
         circle.paid = Vec::new(&env);
         circle.pot = 0;
-        if circle.round >= n {
+        let completed = circle.round == n;
+        if completed {
+            for slot in 0..n {
+                let mut st = sts.get_unchecked(slot);
+                let x = st.collateral;
+                if x > 0 {
+                    st.collateral = 0;
+                    credit_raw(&mut st, x);
+                    sts.set(slot, st);
+                    CollateralReleased {
+                        circle_id,
+                        member: circle.members.get_unchecked(slot),
+                        amount: x,
+                    }
+                    .publish(&env);
+                }
+            }
             circle.status = CircleStatus::Completed;
+        }
+        for slot in 0..n {
+            save_member(
+                &env,
+                circle_id,
+                &circle.members.get_unchecked(slot),
+                &sts.get_unchecked(slot),
+            );
         }
         save_circle(&env, &circle);
         bump_circle(&env, &circle, true);
 
+        if completed {
+            CircleCompleted { circle_id }.publish(&env);
+        }
         PaidOut {
             circle_id,
             recipient,
-            round,
-            amount,
+            round: r,
+            gross,
+            to_debts,
+            withheld,
+            to_claimable: to_claim,
             defaulted,
         }
         .publish(&env);
-        if circle.status == CircleStatus::Completed {
-            CircleCompleted { circle_id }.publish(&env);
-        }
-        Ok(amount)
+        Ok(gross)
+    }
+
+    /// Alias of `settle` (UI compatibility).
+    pub fn payout(env: Env, circle_id: u32) -> Result<i128, Error> {
+        Self::settle(env, circle_id)
     }
 
     /// Withdraw everything claimable (member auth). The only outgoing
@@ -896,6 +1154,30 @@ impl AjoContract {
     ) -> Result<MemberState, Error> {
         load_circle(&env, circle_id)?;
         load_member(&env, circle_id, &member)
+    }
+
+    /// Collateral still missing for `member`: before receiving, up to the
+    /// slot target `R_slot`; after receiving, up to `need` at the current
+    /// round (this part is otherwise withheld from incoming credits).
+    /// Zero for circles that are Completed or Cancelled.
+    pub fn required_collateral(env: Env, circle_id: u32, member: Address) -> Result<i128, Error> {
+        let circle = load_circle(&env, circle_id)?;
+        let st = load_member(&env, circle_id, &member)?;
+        if circle.status == CircleStatus::Completed || circle.status == CircleStatus::Cancelled {
+            return Ok(0);
+        }
+        let n = circle.members.len();
+        let c = circle.contribution;
+        let target = if st.received {
+            need(&st, c, n, circle.round)
+        } else {
+            r_slot(c, n, st.slot)
+        };
+        Ok(if target > st.collateral {
+            sub(target, st.collateral)
+        } else {
+            0
+        })
     }
 
     /// v1-shaped contribution history, derived from `MemberState`.
