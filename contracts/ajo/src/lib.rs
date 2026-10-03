@@ -2,8 +2,11 @@
 //!
 //! A rotating savings group (ajo / esusu / susu / ROSCA) on Soroban.
 //!
-//! * An admin creates a circle with a fixed list of members, a token (e.g. a
-//!   USDC Stellar Asset Contract), a per-round contribution and a round length.
+//! * The contract is deployed with one pinned token (the project's test USDC
+//!   Stellar Asset Contract), passed to the constructor. Circles cannot pick
+//!   another token.
+//! * An admin creates a circle with a fixed list of members, a per-round
+//!   contribution and a round length.
 //! * Every round each member contributes once. The pot goes to
 //!   `members[round % n]`.
 //! * Anyone can trigger the payout once every member has paid, or once the
@@ -13,7 +16,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,
+    Address, Env, Vec,
 };
 
 /// Approximate number of ledgers per day (5 second ledgers).
@@ -27,7 +31,13 @@ const PERSISTENT_EXTEND_TO: u32 = 90 * DAY_IN_LEDGERS;
 const PERSISTENT_THRESHOLD: u32 = 60 * DAY_IN_LEDGERS;
 
 /// Upper bound on circle size to keep per-call costs bounded.
-pub const MAX_MEMBERS: u32 = 50;
+pub const MAX_MEMBERS: u32 = 20;
+/// Minimum round length and join window, in seconds.
+pub const MIN_PERIOD_SECS: u64 = 60;
+/// `unwind` is allowed once `deadline + UNWIND_GRACE_PERIODS * period` passed.
+pub const UNWIND_GRACE_PERIODS: u64 = 2;
+/// Hard cap on credit-pipeline iterations per call.
+pub const MAX_CREDIT_STEPS: u32 = 2_000;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -55,6 +65,28 @@ pub enum Error {
     TooManyMembers = 10,
     /// Requested round does not exist (yet).
     RoundNotFound = 11,
+    /// accept/cancel on a circle that is not Forming.
+    NotForming = 12,
+    /// contribute/settle/unwind/post_collateral when not Active.
+    NotActive = 13,
+    /// Member already accepted its slot.
+    AlreadyAccepted = 14,
+    /// accept after join_deadline.
+    JoinWindowClosed = 15,
+    /// cancel before join_deadline, or all members accepted.
+    CancelNotAllowed = 16,
+    /// unwind before deadline + UNWIND_GRACE_PERIODS * period.
+    UnwindNotAllowed = 17,
+    /// Collateral negative, not a multiple of contribution, or above cap.
+    InvalidCollateral = 18,
+    /// claim with nothing claimable.
+    NothingToClaim = 19,
+    /// contribution * n * 2 > i64::MAX.
+    AmountTooLarge = 20,
+    /// MAX_CREDIT_STEPS exceeded (should never happen; unwind is the escape).
+    CreditLoop = 21,
+    /// Constructor already ran.
+    AlreadyInitialized = 22,
 }
 
 #[contracttype]
@@ -122,6 +154,8 @@ pub struct MemberRecord {
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
+    /// Instance: pinned token (USDC SAC) address.
+    Token,
     /// Instance: number of circles created (next id).
     CircleCount,
     /// Persistent: Circle by id.
@@ -184,6 +218,10 @@ fn extend_instance(env: &Env) {
         .extend_ttl(INSTANCE_THRESHOLD, INSTANCE_EXTEND_TO);
 }
 
+fn pinned_token(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Token).unwrap()
+}
+
 fn extend_persistent(env: &Env, key: &DataKey) {
     env.storage()
         .persistent()
@@ -235,7 +273,8 @@ fn deadline(circle: &Circle) -> u64 {
 
 fn is_ready(env: &Env, circle: &Circle) -> bool {
     circle.status == CircleStatus::Active
-        && (circle.paid.len() == circle.members.len() || env.ledger().timestamp() >= deadline(circle))
+        && (circle.paid.len() == circle.members.len()
+            || env.ledger().timestamp() >= deadline(circle))
 }
 
 fn unpaid_members(env: &Env, circle: &Circle) -> Vec<Address> {
@@ -255,22 +294,31 @@ pub struct AjoContract;
 
 #[contractimpl]
 impl AjoContract {
+    /// Pins the token (the project's test USDC SAC) for every circle.
+    pub fn __constructor(env: Env, token: Address) {
+        if env.storage().instance().has(&DataKey::Token) {
+            panic_with_error!(&env, Error::AlreadyInitialized);
+        }
+        env.storage().instance().set(&DataKey::Token, &token);
+        extend_instance(&env);
+    }
+
     /// Create a new circle. `admin` must authorize. Returns the circle id.
     /// Round 0 starts immediately; its recipient is `members[0]`.
     pub fn create_circle(
         env: Env,
         admin: Address,
-        token: Address,
         contribution: i128,
         members: Vec<Address>,
         period_secs: u64,
+        join_window_secs: u64,
     ) -> Result<u32, Error> {
         admin.require_auth();
 
         if contribution <= 0 {
             return Err(Error::InvalidContribution);
         }
-        if period_secs == 0 {
+        if period_secs < MIN_PERIOD_SECS || join_window_secs < MIN_PERIOD_SECS {
             return Err(Error::InvalidPeriod);
         }
         let n = members.len();
@@ -288,13 +336,20 @@ impl AjoContract {
                 }
             }
         }
+        match contribution.checked_mul(i128::from(n) * 2) {
+            Some(x) if x <= i128::from(i64::MAX) => {}
+            _ => return Err(Error::AmountTooLarge),
+        }
+        let token = pinned_token(&env);
 
         let id: u32 = env
             .storage()
             .instance()
             .get(&DataKey::CircleCount)
             .unwrap_or(0u32);
-        env.storage().instance().set(&DataKey::CircleCount, &(id + 1));
+        env.storage()
+            .instance()
+            .set(&DataKey::CircleCount, &(id + 1));
         extend_instance(&env);
 
         let now = env.ledger().timestamp();
@@ -345,7 +400,7 @@ impl AjoContract {
 
         token::TokenClient::new(&env, &circle.token).transfer(
             &member,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &circle.contribution,
         );
 
@@ -452,6 +507,11 @@ impl AjoContract {
 
     // ------------------------------------------------------------ views
 
+    /// The pinned token (set once by the constructor).
+    pub fn token(env: Env) -> Address {
+        pinned_token(&env)
+    }
+
     /// Full circle state.
     pub fn get_circle(env: Env, circle_id: u32) -> Result<Circle, Error> {
         load_circle(&env, circle_id)
@@ -498,7 +558,11 @@ impl AjoContract {
     }
 
     /// Contribution history of `member` in a circle.
-    pub fn get_member_record(env: Env, circle_id: u32, member: Address) -> Result<MemberRecord, Error> {
+    pub fn get_member_record(
+        env: Env,
+        circle_id: u32,
+        member: Address,
+    ) -> Result<MemberRecord, Error> {
         let circle = load_circle(&env, circle_id)?;
         if !circle.members.contains(&member) {
             return Err(Error::NotMember);

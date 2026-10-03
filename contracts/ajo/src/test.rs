@@ -10,6 +10,7 @@ use soroban_sdk::{
 
 const CONTRIB: i128 = 100_0000000; // 100 USDC (7 decimals)
 const PERIOD: u64 = 7 * 24 * 60 * 60; // one week
+const JOIN: u64 = 24 * 60 * 60; // one day
 
 struct Setup<'a> {
     env: Env,
@@ -37,15 +38,22 @@ fn setup(n: u32) -> Setup<'static> {
         members.push_back(m);
     }
 
-    let contract = env.register(AjoContract, ());
+    let contract = env.register(AjoContract, (sac.address(),));
     let client = AjoContractClient::new(&env, &contract);
     let admin = Address::generate(&env);
-    Setup { env, client, token, admin, members, contract }
+    Setup {
+        env,
+        client,
+        token,
+        admin,
+        members,
+        contract,
+    }
 }
 
 fn create(s: &Setup) -> u32 {
     s.client
-        .create_circle(&s.admin, &s.token.address, &CONTRIB, &s.members, &PERIOD)
+        .create_circle(&s.admin, &CONTRIB, &s.members, &PERIOD, &JOIN)
 }
 
 #[test]
@@ -234,7 +242,10 @@ fn closes_after_final_round() {
     }
     assert_eq!(s.client.get_circle(&id).status, CircleStatus::Completed);
     let m = s.members.get(0).unwrap();
-    assert_eq!(s.client.try_contribute(&id, &m), Err(Ok(Error::CircleClosed)));
+    assert_eq!(
+        s.client.try_contribute(&id, &m),
+        Err(Ok(Error::CircleClosed))
+    );
     assert_eq!(s.client.try_payout(&id), Err(Ok(Error::CircleClosed)));
     assert_eq!(
         s.client.try_get_round_status(&id, &2),
@@ -247,42 +258,46 @@ fn closes_after_final_round() {
 #[test]
 fn invalid_create_params() {
     let s = setup(3);
-    let t = &s.token.address;
     let a = s.members.get(0).unwrap();
     let b = s.members.get(1).unwrap();
 
     // fewer than two members
     assert_eq!(
-        s.client.try_create_circle(&s.admin, t, &CONTRIB, &vec![&s.env, a.clone()], &PERIOD),
+        s.client
+            .try_create_circle(&s.admin, &CONTRIB, &vec![&s.env, a.clone()], &PERIOD, &JOIN),
         Err(Ok(Error::TooFewMembers))
     );
     assert_eq!(
-        s.client.try_create_circle(&s.admin, t, &CONTRIB, &Vec::new(&s.env), &PERIOD),
+        s.client
+            .try_create_circle(&s.admin, &CONTRIB, &Vec::new(&s.env), &PERIOD, &JOIN),
         Err(Ok(Error::TooFewMembers))
     );
     // duplicates
     assert_eq!(
         s.client.try_create_circle(
             &s.admin,
-            t,
             &CONTRIB,
             &vec![&s.env, a.clone(), b.clone(), a.clone()],
-            &PERIOD
+            &PERIOD,
+            &JOIN
         ),
         Err(Ok(Error::DuplicateMember))
     );
     // non-positive contribution
     assert_eq!(
-        s.client.try_create_circle(&s.admin, t, &0, &s.members, &PERIOD),
+        s.client
+            .try_create_circle(&s.admin, &0, &s.members, &PERIOD, &JOIN),
         Err(Ok(Error::InvalidContribution))
     );
     assert_eq!(
-        s.client.try_create_circle(&s.admin, t, &-5, &s.members, &PERIOD),
+        s.client
+            .try_create_circle(&s.admin, &-5, &s.members, &PERIOD, &JOIN),
         Err(Ok(Error::InvalidContribution))
     );
     // zero period
     assert_eq!(
-        s.client.try_create_circle(&s.admin, t, &CONTRIB, &s.members, &0),
+        s.client
+            .try_create_circle(&s.admin, &CONTRIB, &s.members, &0, &JOIN),
         Err(Ok(Error::InvalidPeriod))
     );
     // too many members
@@ -291,7 +306,8 @@ fn invalid_create_params() {
         big.push_back(Address::generate(&s.env));
     }
     assert_eq!(
-        s.client.try_create_circle(&s.admin, t, &CONTRIB, &big, &PERIOD),
+        s.client
+            .try_create_circle(&s.admin, &CONTRIB, &big, &PERIOD, &JOIN),
         Err(Ok(Error::TooManyMembers))
     );
     assert_eq!(s.client.circle_count(), 0);
@@ -301,13 +317,13 @@ fn invalid_create_params() {
 #[should_panic]
 fn create_requires_admin_auth() {
     let env = Env::default();
-    let contract = env.register(AjoContract, ());
-    let client = AjoContractClient::new(&env, &contract);
     let issuer = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(issuer);
+    let contract = env.register(AjoContract, (sac.address(),));
+    let client = AjoContractClient::new(&env, &contract);
     let members = vec![&env, Address::generate(&env), Address::generate(&env)];
     // no mock_all_auths -> admin.require_auth() fails
-    client.create_circle(&Address::generate(&env), &sac.address(), &CONTRIB, &members, &PERIOD);
+    client.create_circle(&Address::generate(&env), &CONTRIB, &members, &PERIOD, &JOIN);
 }
 
 #[test]
@@ -315,10 +331,97 @@ fn multiple_circles_are_independent() {
     let s = setup(3);
     let id0 = create(&s);
     let two = vec![&s.env, s.members.get(1).unwrap(), s.members.get(2).unwrap()];
-    let id1 = s.client.create_circle(&s.admin, &s.token.address, &CONTRIB, &two, &PERIOD);
+    let id1 = s
+        .client
+        .create_circle(&s.admin, &CONTRIB, &two, &PERIOD, &JOIN);
     assert_eq!((id0, id1), (0, 1));
     s.client.contribute(&id1, &s.members.get(1).unwrap());
     assert_eq!(s.client.get_round_status(&id0, &0).paid.len(), 0);
     assert_eq!(s.client.get_round_status(&id1, &0).paid.len(), 1);
-    assert_eq!(s.client.get_round_status(&id1, &0).recipient, s.members.get(1).unwrap());
+    assert_eq!(
+        s.client.get_round_status(&id1, &0).recipient,
+        s.members.get(1).unwrap()
+    );
+}
+
+#[test]
+fn token_is_pinned() {
+    let s = setup(3);
+    // the token is fixed by the constructor; create_circle has no token argument
+    assert_eq!(s.client.token(), s.token.address);
+    let id = create(&s);
+    assert_eq!(s.client.get_circle(&id).token, s.token.address);
+}
+
+#[test]
+fn min_period_enforced() {
+    let s = setup(3);
+    // v1 accepted a 1-second round
+    assert_eq!(
+        s.client.try_create_circle(
+            &s.admin,
+            &CONTRIB,
+            &s.members,
+            &(MIN_PERIOD_SECS - 1),
+            &JOIN
+        ),
+        Err(Ok(Error::InvalidPeriod))
+    );
+    assert_eq!(
+        s.client.try_create_circle(
+            &s.admin,
+            &CONTRIB,
+            &s.members,
+            &PERIOD,
+            &(MIN_PERIOD_SECS - 1)
+        ),
+        Err(Ok(Error::InvalidPeriod))
+    );
+    let id = s.client.create_circle(
+        &s.admin,
+        &CONTRIB,
+        &s.members,
+        &MIN_PERIOD_SECS,
+        &MIN_PERIOD_SECS,
+    );
+    assert_eq!(s.client.get_circle(&id).period_secs, MIN_PERIOD_SECS);
+}
+
+#[test]
+fn max_members_20() {
+    let s = setup(2);
+    assert_eq!(MAX_MEMBERS, 20);
+    let mut big = Vec::new(&s.env);
+    for _ in 0..21 {
+        big.push_back(Address::generate(&s.env));
+    }
+    assert_eq!(
+        s.client
+            .try_create_circle(&s.admin, &CONTRIB, &big, &PERIOD, &JOIN),
+        Err(Ok(Error::TooManyMembers))
+    );
+    big.pop_back();
+    assert_eq!(
+        s.client
+            .create_circle(&s.admin, &CONTRIB, &big, &PERIOD, &JOIN),
+        0
+    );
+}
+
+#[test]
+fn amount_too_large() {
+    let s = setup(2);
+    let c = i128::from(i64::MAX / 2);
+    assert_eq!(
+        s.client
+            .try_create_circle(&s.admin, &c, &s.members, &PERIOD, &JOIN),
+        Err(Ok(Error::AmountTooLarge))
+    );
+    // c * n * 2 == i64::MAX - 1 is still fine
+    let ok = i128::from(i64::MAX / 4);
+    assert_eq!(
+        s.client
+            .create_circle(&s.admin, &ok, &s.members, &PERIOD, &JOIN),
+        0
+    );
 }

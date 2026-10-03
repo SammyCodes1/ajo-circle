@@ -1,0 +1,10 @@
+# gitleaks config: default rules plus an allowlist for Stellar PUBLIC identifiers.
+# G... account addresses and C... contract IDs (56 base32 chars) are public by design.
+# Secret seeds start with "S" and are NOT allowlisted.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Stellar public account addresses and contract IDs"
+regexTarget = "secret"
+regexes = ['''^[GC][A-Z2-7]{55}$''']
