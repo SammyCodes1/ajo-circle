@@ -1,6 +1,6 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ajo } from "@/lib/ajo";
 import { parseAmount, formatAmount, formatDuration } from "@/lib/format";
 import { friendlyError } from "@/lib/errors";
@@ -10,6 +10,7 @@ import { Alert, Button, Card, Eyebrow, TxLink } from "@/components/ui";
 import { useWallet } from "@/components/WalletProvider";
 import { AccountPanel } from "@/components/AccountPanel";
 import { RotationRing } from "@/components/RotationRing";
+import { TokenLabel } from "@/components/TokenLabel";
 
 const PERIODS = [
   { label: "3 min", hint: "demo", secs: 180 },
@@ -18,6 +19,16 @@ const PERIODS = [
   { label: "1 week", hint: "", secs: 604800 },
   { label: "30 days", hint: "monthly", secs: 2592000 },
 ];
+
+// How long members have to accept their slot before the circle can be cancelled (≥ 60 s).
+const JOIN_WINDOWS = [
+  { label: "5 min", hint: "demo", secs: 300 },
+  { label: "1 hour", hint: "", secs: 3600 },
+  { label: "1 day", hint: "", secs: 86400 },
+  { label: "3 days", hint: "", secs: 259200 },
+  { label: "1 week", hint: "", secs: 604800 },
+];
+const MAX_MEMBERS = 20;
 
 function SectionLabel({ n, title, hint }: { n: string; title: string; hint?: string }) {
   return (
@@ -39,6 +50,7 @@ export default function CreatePage() {
   const router = useRouter();
   const [amount, setAmount] = useState("10");
   const [period, setPeriod] = useState(180);
+  const [joinWindow, setJoinWindow] = useState(300);
   const [rows, setRows] = useState<string[]>(["", ""]);
   const [bulk, setBulk] = useState(false);
   const [bulkText, setBulkText] = useState("");
@@ -46,11 +58,13 @@ export default function CreatePage() {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ id: number; hash: string } | null>(null);
 
-  // Pre-fill the connected wallet as the first member.
-  useEffect(() => {
-    if (w.address && rows.every((r) => !r.trim())) setRows([w.address, ""]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [w.address]);
+  // Pre-fill the connected wallet as the first member (adjusting state while rendering,
+  // once per newly connected address, instead of in an effect).
+  const [prefilledFor, setPrefilledFor] = useState<string | null>(null);
+  if (w.address && prefilledFor !== w.address) {
+    setPrefilledFor(w.address);
+    if (rows.every((r) => !r.trim())) setRows([w.address, ""]);
+  }
 
   const members = rows.map((s) => s.trim()).filter(Boolean);
   const rowInvalid = (s: string) => !!s.trim() && (!isValidAddress(s) || !s.trim().startsWith("G"));
@@ -69,7 +83,7 @@ export default function CreatePage() {
   const problems = [
     amountErr,
     members.length < 2 ? "Add at least 2 member addresses" : null,
-    members.length > 50 ? "Maximum 50 members" : null,
+    members.length > MAX_MEMBERS ? `Maximum ${MAX_MEMBERS} members` : null,
     invalid.length ? `Invalid Stellar account address: ${invalid[0]}` : null,
     dupes.length ? `Duplicate member: ${dupes[0]}` : null,
   ].filter(Boolean) as string[];
@@ -102,7 +116,7 @@ export default function CreatePage() {
     setBusy(true);
     setError(null);
     try {
-      const res = await ajo.createCircle(w.address, contribution, members, period, 24 * 60 * 60);
+      const res = await ajo.createCircle(w.address, contribution, members, period, joinWindow);
       setDone({ id: Number(res.returnValue), hash: res.hash });
     } catch (err) {
       setError(friendlyError(err, "create"));
@@ -121,7 +135,8 @@ export default function CreatePage() {
         <h1 className="font-display mt-3 text-[2.4rem] leading-[1.05] text-ink sm:text-5xl">Start a circle</h1>
         <p className="mt-4 text-[1.02rem] leading-relaxed text-ink-soft">
           Set the amount, the rhythm and the order. Member 1 takes the pot in round 1, member 2 in
-          round 2, and so on. You sign once as admin — you don’t have to be a member.
+          round 2, and so on. You sign once to create it; you don’t have to be a member and you get no
+          special powers. The circle starts only when every member has accepted their slot.
         </p>
       </header>
 
@@ -148,7 +163,7 @@ export default function CreatePage() {
           </Card>
 
           <Card as="section">
-            <SectionLabel n="ii." title="Round length" hint="How long members have to pay before the pot can be released." />
+            <SectionLabel n="ii." title="Round length" hint="How long members have to pay before anyone can settle the round." />
             <div role="radiogroup" aria-label="Round length" className="grid grid-cols-2 gap-2 min-[400px]:grid-cols-3 sm:grid-cols-5">
               {PERIODS.map((p) => {
                 const on = period === p.secs;
@@ -176,8 +191,40 @@ export default function CreatePage() {
           </Card>
 
           <Card as="section">
+            <SectionLabel
+              n="iii."
+              title="Join window"
+              hint="Every member must accept their slot within this time. If someone doesn’t, anyone can cancel the circle and posted collateral is refunded."
+            />
+            <div role="radiogroup" aria-label="Join window" className="grid grid-cols-2 gap-2 min-[400px]:grid-cols-3 sm:grid-cols-5">
+              {JOIN_WINDOWS.map((p) => {
+                const on = joinWindow === p.secs;
+                return (
+                  <button
+                    key={p.secs}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => setJoinWindow(p.secs)}
+                    className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                      on
+                        ? "border-ink bg-ink text-ivory"
+                        : "border-line-strong bg-white/50 text-ink hover:border-ink/40"
+                    }`}
+                  >
+                    <span className="block text-sm font-medium">{p.label}</span>
+                    <span className={`block text-xs ${on ? "text-ivory/70" : "text-muted"}`}>
+                      {p.hint || "\u00a0"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
+
+          <Card as="section">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <SectionLabel n="iii." title="Members, in payout order" hint="Stellar account addresses (G…). Use the arrows to reorder." />
+              <SectionLabel n="iv." title="Members, in payout order" hint="Stellar account addresses (G…). Use the arrows to reorder." />
               <button
                 type="button"
                 onClick={() => (bulk ? applyBulk() : openBulk())}
@@ -247,7 +294,7 @@ export default function CreatePage() {
             )}
             {!bulk && (
               <div className="mt-4 flex flex-wrap gap-2 sm:ml-9">
-                <Button type="button" variant="secondary" className="!py-2" onClick={() => setRows((r) => [...r, ""])} disabled={rows.length >= 50}>
+                <Button type="button" variant="secondary" className="!py-2" onClick={() => setRows((r) => [...r, ""])} disabled={rows.length >= MAX_MEMBERS}>
                   + Add member
                 </Button>
                 {w.address && !members.includes(w.address) && (
@@ -262,6 +309,21 @@ export default function CreatePage() {
             )}
           </Card>
 
+          <Card as="section">
+            <SectionLabel
+              n="v."
+              title="Collateral per slot"
+              hint="Early slots post more collateral; anything you don’t post is held back from your payout."
+            />
+            <CollateralTable contribution={contribution !== null && !amountErr ? contribution : null} n={Math.max(members.length, 2)} />
+            <p className="mt-3 text-sm leading-relaxed text-muted">
+              Slot <i>k</i> (0-based) owes <i>n−1−k</i> more contributions after receiving its pot, so its target is
+              {" "}<span className="font-mono text-xs">R = contribution × (n−1−k)</span>. Members can post it when they accept,
+              later, or not at all; whatever is missing is withheld from their own payout and released again as the
+              circle winds down. Collateral is paid back in full at the end.
+            </p>
+          </Card>
+
           {problems.length > 0 && members.length > 0 && !done && (
             <ul className="space-y-1 text-sm text-rust" aria-live="polite">
               {problems.map((p) => (
@@ -271,7 +333,8 @@ export default function CreatePage() {
           )}
           {error && <Alert tone="error">{error}</Alert>}
           {done ? (
-            <Alert tone="success" title={`Circle №${done.id} is live`}>
+            <Alert tone="success" title={`Circle №${done.id} created`}>
+              Waiting for every member to accept their slot. Share the circle link with them.
               <TxLink hash={done.hash} />
               <div className="mt-3">
                 <Button type="button" onClick={() => router.push(`/circle/${done.id}`)}>
@@ -321,16 +384,55 @@ export default function CreatePage() {
           </Card>
           <AccountPanel />
           <div className="px-1 text-sm leading-relaxed text-muted">
-            <p className="font-medium text-ink-soft">House rules, enforced by the contract</p>
+            <p className="font-medium text-ink-soft">How the v2 contract handles money</p>
             <ul className="mt-2 space-y-1.5">
-              <li>· One contribution per member, per round.</li>
-              <li>· Payout unlocks when all have paid, or at the deadline.</li>
-              <li>· Anyone can release it — funds only go to that round’s member.</li>
-              <li>· Unpaid members are recorded as defaulted, for all to see.</li>
+              <li>· Each member signs to accept their slot; nobody is enrolled without consent.</li>
+              <li>· Token is fixed: the project’s own test USDC (<TokenLabel />), not Circle’s.</li>
+              <li>· A missed payment is covered from the defaulter’s collateral; any rest becomes a debt to that round’s recipient, repaid from the defaulter’s next incoming funds.</li>
+              <li>· Anyone can settle a round once all paid or the deadline passed. Settling never sends tokens; each member claims their own balance.</li>
+              <li>· If a round sits unsettled for 2 periods past its deadline, anyone can unwind the circle and refund what it holds pro rata.</li>
+              <li>· Collateral only protects up to what was posted or withheld. This is testnet software, not audited for real money.</li>
             </ul>
           </div>
         </aside>
       </div>
+    </div>
+  );
+}
+
+function CollateralTable({ contribution, n }: { contribution: bigint | null; n: number }) {
+  const rows = Array.from({ length: n }, (_, k) => (contribution === null ? null : contribution * BigInt(n - 1 - k)));
+  const total = rows.reduce<bigint | null>((t, r) => (t === null || r === null ? null : t + r), BigInt(0));
+  return (
+    <div className="overflow-hidden rounded-lg border border-line">
+      <table className="w-full text-sm">
+        <thead className="bg-sand/60 text-left text-xs text-muted">
+          <tr>
+            <th className="px-3 py-2 font-medium">Slot</th>
+            <th className="px-3 py-2 font-medium">Gets the pot in</th>
+            <th className="px-3 py-2 text-right font-medium">Collateral target</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, k) => (
+            <tr key={k} className="border-t border-line">
+              <td className="px-3 py-1.5 font-numeral">{k + 1}</td>
+              <td className="px-3 py-1.5 text-muted">round {k + 1}</td>
+              <td className="px-3 py-1.5 text-right font-numeral">
+                {r === null ? "—" : `${formatAmount(r)} ${config.tokenCode}`}
+              </td>
+            </tr>
+          ))}
+          <tr className="border-t border-line-strong bg-ivory">
+            <td className="px-3 py-2 font-medium" colSpan={2}>
+              Total
+            </td>
+            <td className="px-3 py-2 text-right font-numeral font-medium">
+              {total === null ? "—" : `${formatAmount(total)} ${config.tokenCode}`}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
