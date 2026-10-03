@@ -12,6 +12,7 @@ import { Countdown } from "@/components/Countdown";
 import { useWallet } from "@/components/WalletProvider";
 import { AccountPanel } from "@/components/AccountPanel";
 import { RingLegend, RotationRing } from "@/components/RotationRing";
+import { CountUp, SuccessCheck } from "@/components/motion";
 
 function DashboardSkeleton() {
   return (
@@ -159,7 +160,7 @@ export default function CirclePage() {
   }));
 
   const settled = (cls: string) => (
-        <Card className={cls}>
+        <Card className={`rise ${cls}`} style={{ "--d": "260ms" } as React.CSSProperties}>
           <h2 className="font-display text-xl text-ink">Settled rounds</h2>
           {history.length === 0 ? (
             <p className="mt-4 text-sm text-muted">No rounds settled yet. The first payout will appear here.</p>
@@ -200,9 +201,9 @@ export default function CirclePage() {
   );
 
   return (
-    <div className="space-y-10">
+    <div className="content-in space-y-10">
       {/* ---------------------------------------------------- heading */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="rise flex flex-wrap items-end justify-between gap-4">
         <div>
           <Link href="/" className="-ml-1 inline-flex min-h-11 items-center px-1 text-sm text-muted transition-colors hover:text-ink">
             ← All circles
@@ -229,7 +230,7 @@ export default function CirclePage() {
 
       {/* ---------------------------------------------------- ring + round */}
       <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[1.05fr_1fr]">
-        <Card className="order-2 flex flex-col !p-4 sm:!p-6 lg:order-none">
+        <Card className="rise order-2 flex flex-col !p-4 sm:!p-6 lg:order-none" style={{ "--d": "140ms" } as React.CSSProperties}>
           <div className="flex items-center justify-between px-1">
             <Eyebrow>Rotation</Eyebrow>
             <span className="text-xs text-muted">clockwise from the top</span>
@@ -246,7 +247,9 @@ export default function CirclePage() {
                 <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">
                   Round {circle.round + 1} of {n}
                 </p>
-                <p className="font-numeral mt-1 text-4xl leading-none text-ink sm:text-5xl">{formatAmount(circle.pot)}</p>
+                <p className="font-numeral mt-1 text-4xl leading-none text-ink sm:text-5xl">
+                  <CountUp value={circle.pot} />
+                </p>
                 <p className="mt-1.5 text-xs text-muted">
                   of {formatAmount(fullPot)} {config.tokenCode}
                 </p>
@@ -258,7 +261,7 @@ export default function CirclePage() {
 
         <div className="contents lg:flex lg:flex-col lg:gap-6">
           {current ? (
-            <Card className="order-1 space-y-6 lg:order-none">
+            <Card className="rise order-1 space-y-6 lg:order-none" style={{ "--d": "60ms" } as React.CSSProperties}>
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <Eyebrow>
@@ -309,8 +312,8 @@ export default function CirclePage() {
                   </Button>
                 )}
                 {isMember && iPaid && (
-                  <div className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-sage-wash px-4 py-3 text-sm font-medium text-sage">
-                    <span aria-hidden>✓</span> You’ve paid this round
+                  <div className="alert-in flex flex-1 items-center justify-center gap-2 rounded-lg bg-sage-wash px-4 py-3 text-sm font-medium text-sage">
+                    <SuccessCheck className="h-[1.1rem] w-[1.1rem]" /> You’ve paid this round
                   </div>
                 )}
                 {!me && (
@@ -347,7 +350,7 @@ export default function CirclePage() {
               {txErr && <Alert tone="error">{txErr}</Alert>}
             </Card>
           ) : (
-            <Card className="order-1 space-y-3 lg:order-none">
+            <Card className="rise order-1 space-y-3 lg:order-none">
               <Eyebrow>Circle complete</Eyebrow>
               <p className="font-display text-2xl leading-snug text-ink">
                 Every member has taken their turn. {formatAmount(history.reduce((a, r) => a + BigInt(r.pot), BigInt(0)))}{" "}
@@ -357,7 +360,7 @@ export default function CirclePage() {
             </Card>
           )}
           {isMember && !done && (
-            <div className="order-3 lg:order-none">
+            <div className="rise order-3 lg:order-none" style={{ "--d": "200ms" } as React.CSSProperties}>
               <AccountPanel need={circle.contribution} />
             </div>
           )}
@@ -379,7 +382,7 @@ export default function CirclePage() {
 
       {/* ---------------------------------------------------- members + history */}
       <div className="space-y-6">
-        <Card className="!p-0">
+        <Card className="rise !p-0" style={{ "--d": "260ms" } as React.CSSProperties}>
           <div className="flex items-baseline justify-between px-5 pb-3 pt-5 sm:px-6">
             <h2 className="font-display text-xl text-ink">Members</h2>
             <span className="text-xs text-muted">in payout order</span>

@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { useWallet } from "./WalletProvider";
+import { CountUp } from "./motion";
 import { Alert, Button, Card, Skeleton, TxLink } from "./ui";
 import { AccountStatus, addTrustline, fundWithFriendbot, getAccountStatus } from "@/lib/stellar";
 import { config } from "@/lib/config";
@@ -75,7 +76,7 @@ export function AccountPanel({ need }: { need?: bigint }) {
         </div>
       )}
       {status && (
-        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line text-sm">
+        <dl className="content-in grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line text-sm">
           <div className="bg-ivory p-3">
             <dt className="text-xs text-muted">XLM · for fees</dt>
             <dd className="font-numeral mt-1 text-xl text-ink">
@@ -85,7 +86,7 @@ export function AccountPanel({ need }: { need?: bigint }) {
           <div className="bg-ivory p-3">
             <dt className="text-xs text-muted">{config.tokenCode} · test</dt>
             <dd className={`mt-1 ${status.hasTrustline ? "font-numeral text-xl text-ink" : "pt-1 text-sm text-ochre"}`}>
-              {status.hasTrustline ? formatAmount(status.tokenBalance) : "No trustline"}
+              {status.hasTrustline ? <CountUp value={status.tokenBalance} /> : "No trustline"}
             </dd>
           </div>
         </dl>

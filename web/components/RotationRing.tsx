@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 
 export interface RingMember {
   address: string;
@@ -93,6 +94,20 @@ function RingView({
   const arcPath =
     arcEnd > 0 ? `M ${start.x} ${start.y} A ${R} ${R} 0 ${large} 1 ${end.x} ${end.y}` : "";
 
+  // Pot travel: when the round advances (a payout happened), send a coin from the
+  // centre to the member who just received the pot.
+  const prev = useRef(current);
+  const [travel, setTravel] = useState<{ to: number; key: number } | null>(null);
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = current;
+    if (was >= 0 && was !== current && was < n) {
+      setTravel({ to: was, key: Date.now() });
+      const t = setTimeout(() => setTravel(null), 1400);
+      return () => clearTimeout(t);
+    }
+  }, [current, n]);
+
   return (
     <div className={`relative mx-auto w-full ${labels ? "aspect-[540/460]" : "aspect-square"} ${className}`}>
       <svg
@@ -116,12 +131,14 @@ function RingView({
         {/* travelled arc */}
         {arcPath && (
           <path
+            key={arcEnd}
             d={arcPath}
+            pathLength={1}
             fill="none"
             stroke={done ? "#4F6B4A" : "#D97757"}
             strokeWidth="3"
             strokeLinecap="round"
-            className="transition-all duration-700"
+            className="ring-arc"
           />
         )}
         {/* direction chevron just ahead of the current recipient */}
@@ -147,10 +164,11 @@ function RingView({
           const cos = Math.cos((a * Math.PI) / 180);
           const anchor = Math.abs(cos) < 0.3 ? "middle" : cos > 0 ? "start" : "end";
           return (
-            <g key={m.address + i}>
+            <g key={m.address + i} className="ring-seat" style={{ "--i": i } as React.CSSProperties}>
               {isCurrent && (
                 <>
                   <circle cx={p.x} cy={p.y} r={nodeR + 9} fill="#D97757" opacity="0.14" />
+                  <circle className="ring-halo" cx={p.x} cy={p.y} r={nodeR + 13} fill="none" stroke="#D97757" strokeWidth="1.2" />
                   <circle cx={p.x} cy={p.y} r={nodeR + 5} fill="none" stroke="#D97757" strokeWidth="1" opacity="0.6" />
                 </>
               )}
@@ -172,6 +190,7 @@ function RingView({
               )}
               {m.paid && (
                 <g transform={`translate(${p.x + nodeR * 0.72} ${p.y - nodeR * 0.72})`}>
+                  <g className="ring-badge" style={{ "--i": i } as React.CSSProperties}>
                   <circle r={Math.max(4, nodeR * 0.42)} fill="#4F6B4A" stroke="#FAF9F5" strokeWidth="1.5" />
                   <path
                     d={`M ${-nodeR * 0.18} 0 L ${-nodeR * 0.04} ${nodeR * 0.14} L ${nodeR * 0.2} ${-nodeR * 0.14}`}
@@ -181,13 +200,16 @@ function RingView({
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
+                  </g>
                 </g>
               )}
               {m.defaulted && (
                 <g transform={`translate(${p.x - nodeR * 0.72} ${p.y - nodeR * 0.72})`}>
+                  <g className="ring-badge" style={{ "--i": i } as React.CSSProperties}>
                   <circle r={Math.max(4, nodeR * 0.38)} fill="#9E3F2C" stroke="#FAF9F5" strokeWidth="1.5" />
                   <path d={`M 0 ${-nodeR * 0.16} V ${nodeR * 0.04}`} stroke="#FAF9F5" strokeWidth="1.6" strokeLinecap="round" />
                   <circle cx="0" cy={nodeR * 0.17} r="0.9" fill="#FAF9F5" />
+                  </g>
                 </g>
               )}
               {labels && (
@@ -206,6 +228,22 @@ function RingView({
             </g>
           );
         })}
+        {travel && (() => {
+          const p = polar(angleOf(travel.to), R);
+          return (
+            <circle
+              key={travel.key}
+              className="pot-coin"
+              cx={C}
+              cy={C}
+              r={10}
+              fill="#C96442"
+              stroke="#FAF9F5"
+              strokeWidth="2"
+              style={{ "--dx": `${p.x - C}px`, "--dy": `${p.y - C}px` } as React.CSSProperties}
+            />
+          );
+        })()}
       </svg>
       {children && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

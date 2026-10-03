@@ -1,24 +1,27 @@
 "use client";
 import Link from "next/link";
 import { explorer } from "@/lib/config";
+import { SuccessCheck } from "./motion";
 
 export function Card({
   children,
   className = "",
   as: Tag = "div",
+  style,
 }: {
   children: React.ReactNode;
   className?: string;
   as?: "div" | "section" | "article";
+  style?: React.CSSProperties;
 }) {
   return (
-    <Tag className={`rounded-xl border border-line bg-ivory p-4 shadow-[var(--shadow-card)] min-[360px]:p-5 sm:p-6 ${className}`}>{children}</Tag>
+    <Tag style={style} className={`rounded-xl border border-line bg-ivory p-4 shadow-[var(--shadow-card)] min-[360px]:p-5 sm:p-6 ${className}`}>{children}</Tag>
   );
 }
 
 type Variant = "primary" | "secondary" | "ghost" | "ink";
 const base =
-  "inline-flex min-h-11 select-none items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-[0.9rem] font-medium tracking-[-0.005em] transition-[background-color,color,border-color,box-shadow,transform] duration-200 ease-[var(--ease-calm)] active:translate-y-px disabled:cursor-not-allowed disabled:active:translate-y-0";
+  "inline-flex min-h-11 select-none items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-[0.9rem] font-medium tracking-[-0.005em] transition-[background-color,color,border-color,box-shadow,transform] duration-200 ease-[var(--ease-calm)] active:scale-[0.97] disabled:cursor-not-allowed disabled:active:scale-100";
 const variants: Record<Variant, string> = {
   primary:
     "bg-clay-strong text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.18)] hover:bg-clay-deep disabled:bg-sand disabled:text-muted disabled:shadow-none",
@@ -89,9 +92,13 @@ export function Alert({
   return (
     <div
       role={tone === "error" ? "alert" : "status"}
-      className={`flex gap-3 rounded-lg border px-4 py-3 text-sm leading-relaxed ${t.box}`}
+      className={`alert-in flex gap-3 rounded-lg border px-4 py-3 text-sm leading-relaxed ${t.box}`}
     >
-      <span aria-hidden className={`mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full ${t.dot}`} />
+      {tone === "success" ? (
+        <SuccessCheck className="mt-0.5 h-[1.15rem] w-[1.15rem]" />
+      ) : (
+        <span aria-hidden className={`mt-[0.45rem] h-1.5 w-1.5 shrink-0 rounded-full ${t.dot}`} />
+      )}
       <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
         {title && <p className="font-semibold">{title}</p>}
         {children}

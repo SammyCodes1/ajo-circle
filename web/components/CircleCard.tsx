@@ -4,6 +4,7 @@ import { Circle } from "@/lib/ajo";
 import { config } from "@/lib/config";
 import { formatAmount, formatDuration } from "@/lib/format";
 import { Pill, Skeleton } from "./ui";
+import { CountUp } from "./motion";
 
 /** Segmented rounds bar: settled = ink, current = clay, upcoming = sand. */
 export function RoundsBar({ total, current, done }: { total: number; current: number; done: boolean }) {
@@ -12,7 +13,7 @@ export function RoundsBar({ total, current, done }: { total: number; current: nu
       {Array.from({ length: total }, (_, i) => (
         <span
           key={i}
-          className={`h-1.5 flex-1 rounded-full transition-colors ${
+          className={`h-1.5 flex-1 rounded-full transition-colors duration-500 ${
             done || i < current ? "bg-ink" : i === current ? "bg-clay" : "bg-sand"
           }`}
         />
@@ -27,7 +28,7 @@ export function CircleCard({ c, mine }: { c: Circle; mine: boolean }) {
   return (
     <Link
       href={`/circle/${c.id}`}
-      className="group block animate-rise rounded-xl border border-line bg-ivory p-5 transition-[border-color,transform,box-shadow] duration-300 ease-[var(--ease-calm)] hover:-translate-y-0.5 hover:border-line-strong hover:shadow-[0_10px_30px_-18px_rgb(31_30_29/0.35)] sm:p-6"
+      className="lift group block rounded-xl border border-line bg-ivory p-5 hover:border-line-strong sm:p-6"
     >
       <div className="flex items-center justify-between gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
@@ -45,7 +46,7 @@ export function CircleCard({ c, mine }: { c: Circle; mine: boolean }) {
         </div>
       </div>
       <p className="font-numeral mt-5 text-[2.6rem] leading-none text-ink">
-        {formatAmount(c.contribution)}
+        <CountUp value={c.contribution} />
         <span className="ml-2 font-sans text-base font-medium tracking-normal text-muted">{config.tokenCode}</span>
       </p>
       <p className="mt-2 text-sm text-muted">

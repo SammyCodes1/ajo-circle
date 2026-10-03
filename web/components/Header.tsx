@@ -80,12 +80,23 @@ function NavIcon({ kind, active }: { kind: string; active: boolean }) {
 /** Bottom tab bar for phones/tablets (< md). */
 export function MobileNav() {
   const path = usePathname();
+  const activeIdx = NAV.findIndex((n) => isActive(path, n.href));
   return (
     <nav
       aria-label="Main"
       className="fixed inset-x-0 bottom-0 z-[var(--z-sticky)] border-t border-line/80 bg-paper/85 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_-18px_rgb(31_30_29/0.3)] backdrop-blur-md backdrop-saturate-150 md:hidden"
     >
-      <ul className="mx-auto grid max-w-md grid-cols-3">
+      <ul className="relative mx-auto grid max-w-md grid-cols-3">
+        {/* sliding active indicator (transform only) */}
+        <span
+          aria-hidden
+          className={`pointer-events-none absolute left-0 top-0 flex h-[2px] w-1/3 justify-center transition-[transform,opacity] duration-500 ease-[var(--ease-calm)] ${
+            activeIdx < 0 ? "opacity-0" : "opacity-100"
+          }`}
+          style={{ transform: `translateX(${Math.max(activeIdx, 0) * 100}%)` }}
+        >
+          <span className="h-full w-10 rounded-full bg-clay" />
+        </span>
         {NAV.map((n) => {
           const active = isActive(path, n.href);
           return (
@@ -97,7 +108,9 @@ export function MobileNav() {
                   active ? "font-medium text-clay-deep" : "text-muted"
                 }`}
               >
-                <NavIcon kind={n.icon} active={active} />
+                <span className={`transition-transform duration-300 ease-[var(--ease-calm)] ${active ? "-translate-y-px scale-110" : ""}`}>
+                  <NavIcon kind={n.icon} active={active} />
+                </span>
                 {"short" in n ? n.short : n.label}
               </Link>
             </li>

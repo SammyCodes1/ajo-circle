@@ -88,7 +88,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="relative">
+        <div className="rise relative" style={{ "--d": "120ms" } as React.CSSProperties}>
           <div className="absolute inset-0 overflow-hidden rounded-[28px] border border-line bg-[#efe9df]">
             <AdirePattern className="absolute inset-0" opacity={0.11} />
             <div className="absolute inset-0 bg-[radial-gradient(closest-side,#f5f1ea_55%,transparent)]" />
@@ -118,7 +118,7 @@ export default function Home() {
           </button>
         </div>
         {error && <Alert tone="error">{error}</Alert>}
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="stagger grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {!circles && !error && [0, 1, 2].map((i) => <CircleCardSkeleton key={i} />)}
           {circles?.map((c) => <CircleCard key={c.id} c={c} mine={mine(c)} />)}
           {circles && (
@@ -146,7 +146,7 @@ export default function Home() {
         <h2 className="font-display mt-2 max-w-[22ch] text-3xl text-ink">
           The same circle your mother trusted, with the books kept by Stellar.
         </h2>
-        <ol className="mt-10 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3">
+        <ol className="stagger mt-10 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3">
           {STEPS.map((s) => (
             <li key={s.n} className="bg-ivory p-6">
               <span className="font-numeral text-3xl text-clay">{s.n}</span>

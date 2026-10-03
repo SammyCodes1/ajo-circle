@@ -130,7 +130,7 @@ export default function HistoryPage() {
                 <Link
                   key={c.id}
                   href={`/circle/${c.id}`}
-                  className="group block animate-rise rounded-xl border border-line bg-ivory p-5 transition-[border-color,box-shadow] duration-300 hover:border-line-strong hover:shadow-[0_10px_30px_-18px_rgb(31_30_29/0.35)] sm:p-6"
+                  className="lift group block animate-rise rounded-xl border border-line bg-ivory p-5 hover:border-line-strong sm:p-6"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
