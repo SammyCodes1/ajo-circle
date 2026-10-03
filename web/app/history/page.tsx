@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { ajo, Circle, MemberRecord } from "@/lib/ajo";
+import { ajo, Circle, MemberState, openDebt } from "@/lib/ajo";
 import { formatAmount } from "@/lib/format";
 import { friendlyError } from "@/lib/errors";
 import { config } from "@/lib/config";
@@ -14,7 +14,7 @@ import { RoundsBar } from "@/components/CircleCard";
 
 interface Row {
   circle: Circle;
-  record: MemberRecord;
+  record: MemberState;
   position: number;
 }
 
@@ -31,7 +31,7 @@ export default function HistoryPage() {
       const n = await ajo.circleCount();
       const circles = await Promise.all(Array.from({ length: n }, (_, i) => ajo.getCircle(i)));
       const mine = circles.filter((c) => c.members.includes(w.address!));
-      const recs = await Promise.all(mine.map((c) => ajo.getMemberRecord(c.id, w.address!)));
+      const recs = await Promise.all(mine.map((c) => ajo.getMemberState(c.id, w.address!)));
       setRows(
         mine
           .map((c, i) => ({ circle: c, record: recs[i], position: c.members.indexOf(w.address!) }))
@@ -42,7 +42,8 @@ export default function HistoryPage() {
     }
   }, [w.address]);
   useEffect(() => {
-    load();
+    const t = setTimeout(() => void load(), 0);
+    return () => clearTimeout(t);
   }, [load]);
 
   if (!w.address)
@@ -56,8 +57,8 @@ export default function HistoryPage() {
               Your record, <em className="text-clay-deep">in every circle</em>.
             </h1>
             <p className="mt-4 max-w-[42ch] leading-relaxed text-ink-soft">
-              Connect your wallet to see what you’ve contributed, what you’ve received and any rounds
-              you missed — read straight from the contract.
+              Connect your wallet to see what you’ve contributed, what you can claim, any open debts and
+              any rounds you missed — read straight from the contract.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <Button onClick={w.connect} loading={w.connecting}>
@@ -79,10 +80,11 @@ export default function HistoryPage() {
     (a, r) => ({
       paid: a.paid + r.record.paid,
       missed: a.missed + r.record.missed,
-      contributed: a.contributed + r.circle.contribution * BigInt(r.record.paid),
-      received: a.received + r.record.received,
+      claimable: a.claimable + BigInt(r.record.claimable),
+      claimed: a.claimed + BigInt(r.record.total_claimed),
+      debts: a.debts + openDebt(r.record),
     }),
-    { paid: 0, missed: 0, contributed: BigInt(0), received: BigInt(0) },
+    { paid: 0, missed: 0, claimable: BigInt(0), claimed: BigInt(0), debts: BigInt(0) },
   );
 
   return (
@@ -94,17 +96,18 @@ export default function HistoryPage() {
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-6">
           {error && <Alert tone="error">{error}</Alert>}
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3">
             {rows
               ? [
                   ["Rounds paid", String(totals.paid), undefined],
                   ["Rounds missed", String(totals.missed), undefined],
-                  ["Contributed", formatAmount(totals.contributed), config.tokenCode],
-                  ["Received", formatAmount(totals.received), config.tokenCode],
+                  ["Claimable now", formatAmount(totals.claimable), config.tokenCode],
+                  ["Claimed", formatAmount(totals.claimed), config.tokenCode],
+                  ["Open debts", formatAmount(totals.debts), config.tokenCode],
                 ].map(([k, v, u]) => (
-                  <Stat key={k} label={k!} value={v} unit={u} className="bg-ivory p-5" />
+                  <Stat key={k} label={k!} value={v} unit={u} className="bg-ivory p-4 min-[360px]:p-5" />
                 ))
-              : [0, 1, 2, 3].map((i) => (
+              : [0, 1, 2, 3, 4].map((i) => (
                   <div key={i} className="space-y-2 bg-ivory p-5">
                     <Skeleton className="h-3 w-20" />
                     <Skeleton className="h-7 w-14" />
@@ -115,7 +118,7 @@ export default function HistoryPage() {
           {rows && rows.length === 0 && (
             <Card className="text-center">
               <p className="font-display text-2xl text-ink">You’re not in a circle yet</p>
-              <p className="mt-2 text-sm text-muted">Start one with people you trust, or ask an admin to add your address.</p>
+              <p className="mt-2 text-sm text-muted">Start one with people you trust, or ask someone to add your address — you&apos;ll then accept your slot.</p>
               <LinkButton href="/create" className="mt-5">
                 Start a circle
               </LinkButton>
@@ -125,7 +128,8 @@ export default function HistoryPage() {
           <div className="space-y-4">
             {rows?.map(({ circle: c, record: r, position }) => {
               const done = c.status === "Completed";
-              const got = position < c.round;
+              const got = r.received;
+              const debts = r.debts.filter((d) => BigInt(d.amount) > BigInt(0));
               return (
                 <Link
                   key={c.id}
@@ -134,18 +138,26 @@ export default function HistoryPage() {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Circle №{c.id}</p>
-                    {done ? <Pill tone="sage" dot>Completed</Pill> : <Pill>Round {c.round + 1} of {c.members.length}</Pill>}
+                    {done ? (
+                      <Pill tone="sage" dot>Completed</Pill>
+                    ) : c.status === "Forming" ? (
+                      <Pill tone="ochre" dot>{r.accepted ? "Accepted · waiting for others" : "Accept your slot"}</Pill>
+                    ) : c.status === "Cancelled" ? (
+                      <Pill>Cancelled</Pill>
+                    ) : (
+                      <Pill>Round {c.round + 1} of {c.members.length}</Pill>
+                    )}
                   </div>
                   <p className="mt-3 text-ink-soft">
                     Your turn: <span className="font-numeral text-lg text-ink">round {position + 1}</span>
                     {got ? (
-                      <span className="ml-2 text-sm text-sage">✓ received {formatAmount(r.received)} {config.tokenCode}</span>
+                      <span className="ml-2 text-sm text-sage">✓ pot of {formatAmount(r.received_gross)} {config.tokenCode} settled to you</span>
                     ) : (
                       <span className="ml-2 text-sm text-muted">· {formatAmount(c.contribution)} {config.tokenCode} per round</span>
                     )}
                   </p>
                   <div className="mt-4">
-                    <RoundsBar total={c.members.length} current={c.round} done={done} />
+                    <RoundsBar total={c.members.length} current={c.status === "Active" ? c.round : -1} done={done} />
                   </div>
                   <div className="mt-4 flex flex-wrap gap-1.5">
                     <Pill tone="sage">paid {r.paid}</Pill>
@@ -153,8 +165,19 @@ export default function HistoryPage() {
                     {r.missed_rounds.length > 0 && (
                       <Pill tone="rust">missed round{r.missed_rounds.length > 1 ? "s" : ""} {r.missed_rounds.map((x) => x + 1).join(", ")}</Pill>
                     )}
-                    <Pill tone="indigo">received {formatAmount(r.received)}</Pill>
+                    <Pill tone="indigo">collateral {formatAmount(r.collateral)}</Pill>
+                    {r.claimable > BigInt(0) && <Pill tone="clay">claimable {formatAmount(r.claimable)}</Pill>}
+                    {r.total_claimed > BigInt(0) && <Pill tone="neutral">claimed {formatAmount(r.total_claimed)}</Pill>}
                   </div>
+                  {debts.length > 0 && (
+                    <ul className="mt-3 space-y-0.5 text-xs text-rust">
+                      {debts.map((d, k) => (
+                        <li key={k}>
+                          Open debt: {formatAmount(d.amount)} {config.tokenCode} to {d.creditor.slice(0, 4)}…{d.creditor.slice(-4)} (round {d.round + 1})
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </Link>
               );
             })}
