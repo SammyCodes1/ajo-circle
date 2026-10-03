@@ -16,6 +16,21 @@ import { kitError, loadWalletKit } from "./walletKit";
 import { config } from "./config";
 
 export const rpcServer = new rpc.Server(config.rpcUrl);
+
+/** Fired after any write that can change the connected account's balances. */
+export const BALANCES_EVENT = "ajo:balances-changed";
+export function notifyBalancesChanged() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(BALANCES_EVENT));
+}
+
+/** Testnet/mainnet base reserve (protocol parameter): 0.5 XLM per ledger entry. */
+const BASE_RESERVE_STROOPS = BigInt(5_000_000);
+
+/** "123.4567" -> stroops (7 decimals). */
+function toStroops(v: string): bigint {
+  const [w, f = ""] = v.split(".");
+  return BigInt(w) * BigInt(10_000_000) + BigInt(f.padEnd(7, "0").slice(0, 7));
+}
 export const horizon = new Horizon.Server(config.horizonUrl);
 
 /** Simulate a read-only contract call and decode the result to native JS. */
@@ -86,6 +101,7 @@ export async function invokeWrite(
     sleepStrategy: () => 1500,
   });
   if (final.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+    notifyBalancesChanged();
     return {
       hash: sent.hash,
       returnValue: final.returnValue ? scValToNative(final.returnValue) : undefined,
@@ -104,6 +120,11 @@ export interface AccountStatus {
   xlm: string;
   hasTrustline: boolean;
   tokenBalance: bigint; // in stroops (7 decimals)
+  xlmStroops: bigint; // total native balance
+  /** Locked by the minimum balance (base reserve × entries) plus selling liabilities. */
+  xlmReserved: bigint;
+  /** Native balance minus the reserve: what can actually be spent / used for fees. */
+  xlmSpendable: bigint;
 }
 
 /** Look up XLM balance and the test-USDC trustline/balance via Horizon. */
@@ -113,8 +134,12 @@ export async function getAccountStatus(address: string): Promise<AccountStatus> 
     let xlm = "0";
     let hasTrustline = false;
     let tokenBalance = BigInt(0);
+    let liabilities = BigInt(0);
     for (const b of acc.balances) {
-      if (b.asset_type === "native") xlm = b.balance;
+      if (b.asset_type === "native") {
+        xlm = b.balance;
+        liabilities = toStroops(b.selling_liabilities ?? "0");
+      }
       else if (
         (b.asset_type === "credit_alphanum4" || b.asset_type === "credit_alphanum12") &&
         b.asset_code === config.tokenCode &&
@@ -125,11 +150,20 @@ export async function getAccountStatus(address: string): Promise<AccountStatus> 
         tokenBalance = BigInt(w) * BigInt(10_000_000) + BigInt(f.padEnd(7, "0").slice(0, 7));
       }
     }
-    return { exists: true, xlm, hasTrustline, tokenBalance };
+    const entries =
+      BigInt(2) +
+      BigInt(acc.subentry_count) +
+      BigInt(acc.num_sponsoring ?? 0) -
+      BigInt(acc.num_sponsored ?? 0);
+    const xlmStroops = toStroops(xlm);
+    const reserved = entries * BASE_RESERVE_STROOPS + liabilities;
+    const spendable = xlmStroops > reserved ? xlmStroops - reserved : BigInt(0);
+    return { exists: true, xlm, hasTrustline, tokenBalance, xlmStroops, xlmReserved: reserved, xlmSpendable: spendable };
   } catch (e: unknown) {
     const status = (e as { response?: { status?: number } })?.response?.status;
     if (status === 404 || (e instanceof Error && /not found/i.test(e.message))) {
-      return { exists: false, xlm: "0", hasTrustline: false, tokenBalance: BigInt(0) };
+      const z = BigInt(0);
+      return { exists: false, xlm: "0", hasTrustline: false, tokenBalance: z, xlmStroops: z, xlmReserved: z, xlmSpendable: z };
     }
     throw e;
   }
@@ -147,12 +181,14 @@ export async function addTrustline(address: string): Promise<string> {
     .build();
   const signed = await signAndSend(tx, address);
   const res = await horizon.submitTransaction(signed);
+  notifyBalancesChanged();
   return res.hash;
 }
 
 export async function fundWithFriendbot(address: string): Promise<void> {
   const r = await fetch(`https://friendbot.stellar.org/?addr=${encodeURIComponent(address)}`);
   if (!r.ok) throw new Error(`Friendbot failed (${r.status}). The account may already be funded.`);
+  notifyBalancesChanged();
 }
 
 export const addr = (a: string) => new Address(a).toScVal();

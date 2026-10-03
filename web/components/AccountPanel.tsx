@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useWallet } from "./WalletProvider";
 import { CountUp } from "./motion";
 import { Alert, Button, Card, Skeleton, TxLink } from "./ui";
-import { AccountStatus, addTrustline, fundWithFriendbot, getAccountStatus } from "@/lib/stellar";
+import { AccountStatus, addTrustline, BALANCES_EVENT, fundWithFriendbot, getAccountStatus } from "@/lib/stellar";
 import { config } from "@/lib/config";
 import { formatAmount } from "@/lib/format";
 import { friendlyError } from "@/lib/errors";
@@ -23,7 +23,11 @@ export function useAccountStatus() {
     }
   }, [address]);
   useEffect(() => {
+    setStatus(null);
     refresh();
+    // Any balance-changing write (contribute, payout, trustline, Friendbot) refreshes every view.
+    window.addEventListener(BALANCES_EVENT, refresh);
+    return () => window.removeEventListener(BALANCES_EVENT, refresh);
   }, [refresh]);
   return { status, error, refresh };
 }

@@ -1,9 +1,13 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useWallet } from "./WalletProvider";
-import { Button } from "./ui";
-import { shortAddr } from "@/lib/format";
-import { explorer } from "@/lib/config";
+import { Button, Skeleton } from "./ui";
+import { useAccountStatus } from "./AccountPanel";
+import { CountUp } from "./motion";
+import { addTrustline, fundWithFriendbot } from "@/lib/stellar";
+import { friendlyError } from "@/lib/errors";
+import { formatAmount, shortAddr } from "@/lib/format";
+import { config, explorer } from "@/lib/config";
 
 /** Header wallet control: one Connect button (opens the kit's picker) or a wallet chip with a small menu. */
 export function WalletMenu() {
@@ -11,6 +15,12 @@ export function WalletMenu() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const { status, error: balErr, refresh } = useAccountStatus();
+
+  // Fresh balances every time the menu opens.
+  useEffect(() => {
+    if (open) refresh();
+  }, [open, refresh]);
 
   useEffect(() => {
     if (!open) return;
@@ -83,6 +93,7 @@ export function WalletMenu() {
               <p className="mt-1.5 text-xs text-muted">Make sure your wallet is set to Testnet.</p>
             )}
           </div>
+          <Balances status={status} error={balErr} address={w.address} />
           <MenuItem onClick={copy}>{copied ? "Copied ✓" : "Copy address"}</MenuItem>
           <a
             role="menuitem"
@@ -129,4 +140,78 @@ function MenuItem({ children, onClick, danger }: { children: React.ReactNode; on
       {children}
     </button>
   );
+}
+
+type Status = ReturnType<typeof useAccountStatus>["status"];
+
+function Balances({ status, error, address }: { status: Status; error: string | null; address: string }) {
+  const [busy, setBusy] = useState<"fb" | "tl" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const act = async (key: "fb" | "tl", fn: () => Promise<unknown>) => {
+    setBusy(key);
+    setErr(null);
+    try {
+      await fn(); // helpers broadcast a balances refresh on success
+    } catch (e) {
+      setErr(friendlyError(e, "trustline"));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const xlm = (v: bigint) => <CountUp value={v} />;
+
+  return (
+    <div className="border-b border-line px-3 py-2.5" aria-live="polite">
+      <p className="font-mono text-xs uppercase tracking-[0.14em] text-muted">Balances</p>
+      {error && <p className="mt-1.5 text-xs text-rust">{error}</p>}
+      {!status && !error && (
+        <div className="mt-2 grid grid-cols-2 gap-2" aria-label="Loading balances">
+          {[0, 1].map((i) => (
+            <div key={i} className="space-y-1.5">
+              <Skeleton className="h-3 w-12" />
+              <Skeleton className="h-5 w-16" />
+            </div>
+          ))}
+        </div>
+      )}
+      {status && !status.exists && (
+        <div className="content-in mt-1.5 space-y-2">
+          <p className="text-xs leading-relaxed text-ochre">Not funded on testnet yet — it needs a little XLM for fees.</p>
+          <Button variant="secondary" className="w-full !py-2 !text-sm" loading={busy === "fb"} onClick={() => act("fb", () => fundWithFriendbot(address))}>
+            Fund with Friendbot
+          </Button>
+        </div>
+      )}
+      {status && status.exists && (
+        <div className="content-in">
+          <dl className="mt-2 grid grid-cols-2 gap-2">
+            <div className="min-w-0">
+              <dt className="text-xs text-muted">{config.tokenCode} · test</dt>
+              <dd className={`mt-0.5 ${status.hasTrustline ? "font-numeral text-lg leading-tight text-ink" : "text-xs text-ochre"}`}>
+                {status.hasTrustline ? <CountUp value={status.tokenBalance} /> : "No trustline"}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-xs text-muted">XLM</dt>
+              <dd className="font-numeral mt-0.5 text-lg leading-tight text-ink">{xlm(status.xlmStroops)}</dd>
+            </div>
+          </dl>
+          <p className="mt-1 text-xs leading-snug text-muted">
+            <span className="tnum text-ink-soft">{formatXlm(status.xlmSpendable)}</span> spendable ·{" "}
+            <span className="tnum">{formatXlm(status.xlmReserved)}</span> reserve
+          </p>
+          {!status.hasTrustline && (
+            <Button variant="secondary" className="mt-2 w-full !py-2 !text-sm" loading={busy === "tl"} onClick={() => act("tl", () => addTrustline(address))}>
+              Add {config.tokenCode} trustline
+            </Button>
+          )}
+        </div>
+      )}
+      {err && <p className="alert-in mt-1.5 text-xs text-rust">{err}</p>}
+    </div>
+  );
+}
+
+function formatXlm(v: bigint) {
+  return formatAmount(v);
 }
