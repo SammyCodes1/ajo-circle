@@ -8,6 +8,8 @@ import { addTrustline, fundWithFriendbot } from "@/lib/stellar";
 import { friendlyError } from "@/lib/errors";
 import { formatAmount, shortAddr } from "@/lib/format";
 import { config, explorer } from "@/lib/config";
+import { GetTestUsdc, openLocalDialog, TestnetBadge } from "./LocalWallet";
+import { confirmBeforeSigning, setConfirmBeforeSigning } from "@/lib/localWallet";
 
 /** Header wallet control: one Connect button (opens the kit's picker) or a wallet chip with a small menu. */
 export function WalletMenu() {
@@ -87,13 +89,16 @@ export function WalletMenu() {
           className="pop-in absolute right-0 top-[calc(100%+0.5rem)] z-[var(--z-overlay)] w-60 max-w-[calc(100vw-2rem)] origin-top-right rounded-xl border border-line bg-ivory p-1.5 shadow-[var(--shadow-overlay)]"
         >
           <div className="border-b border-line px-3 pb-2.5 pt-2">
-            <p className="text-xs text-muted">Connected with {w.walletName ?? "your wallet"}</p>
+            <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
+              Connected with {w.walletName ?? "your wallet"} {w.isLocal && <TestnetBadge />}
+            </p>
             <p className="mt-1 break-all font-mono text-xs text-ink">{w.address}</p>
             {!w.networkPassphrase && (
               <p className="mt-1.5 text-xs text-muted">Make sure your wallet is set to Testnet.</p>
             )}
           </div>
           <Balances status={status} error={balErr} address={w.address} />
+          {w.isLocal && <LocalItems close={() => setOpen(false)} />}
           <MenuItem onClick={copy}>{copied ? "Copied ✓" : "Copy address"}</MenuItem>
           <a
             role="menuitem"
@@ -123,6 +128,47 @@ export function WalletMenu() {
           </MenuItem>
         </div>
       )}
+    </div>
+  );
+}
+
+function LocalItems({ close }: { close: () => void }) {
+  const w = useWallet();
+  const [ask, setAsk] = useState(false);
+  useEffect(() => setAsk(confirmBeforeSigning()), []);
+  return (
+    <div className="border-b border-line py-1">
+      <MenuItem
+        onClick={() => {
+          close();
+          openLocalDialog("backup");
+        }}
+      >
+        {w.localWallet?.backedUp ? "Show secret key" : "Back up secret key"}
+        {!w.localWallet?.backedUp && <span aria-hidden className="ml-auto h-2 w-2 rounded-full bg-ochre-bright" />}
+      </MenuItem>
+      <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-lg px-3 text-sm text-ink-soft hover:bg-sand/70">
+        Ask before signing
+        <input
+          type="checkbox"
+          role="switch"
+          checked={ask}
+          onChange={(e) => {
+            setAsk(e.target.checked);
+            setConfirmBeforeSigning(e.target.checked);
+          }}
+          className="size-4 accent-[var(--color-clay-strong)]"
+        />
+      </label>
+      <MenuItem
+        danger
+        onClick={() => {
+          close();
+          openLocalDialog("forget");
+        }}
+      >
+        Forget this wallet…
+      </MenuItem>
     </div>
   );
 }
@@ -205,6 +251,7 @@ function Balances({ status, error, address }: { status: Status; error: string | 
               Add {config.tokenCode} trustline
             </Button>
           )}
+          {status.hasTrustline && <GetTestUsdc address={address} className="mt-2" />}
         </div>
       )}
       {err && <p className="alert-in mt-1.5 text-xs text-rust">{err}</p>}

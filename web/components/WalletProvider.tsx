@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { config } from "@/lib/config";
+import { getAccountStatus } from "@/lib/stellar";
 import {
   inFreighterMobile,
   kitError,
@@ -12,8 +13,20 @@ import {
   type WalletBrowser,
   type WalletKit,
 } from "@/lib/walletKit";
-import { beginWcFlow, CANCELLED, endWcFlow, setWcDebug, testnetSession, waitSignClient, withDeadline } from "@/lib/wcSession";
+import { beginWcFlow, CANCELLED, dismissWcSheet, endWcFlow, setWcDebug, testnetSession, waitSignClient, withDeadline } from "@/lib/wcSession";
 import { WalletDebugPanel, WcConnectSheet } from "./WcConnectSheet";
+import { LocalWalletLayer } from "./LocalWallet";
+import {
+  consumeFreshLocalWallet,
+  createLocalWallet,
+  forgetLocalWallet,
+  importLocalWallet,
+  LOCAL_WALLET_ID,
+  localWalletInfo,
+  onLocalWalletChange,
+  runLocalSetup,
+  type LocalWalletInfo,
+} from "@/lib/localWallet";
 
 interface WalletState {
   /** true once we know whether a previous session exists (avoids header flicker). */
@@ -35,6 +48,13 @@ interface WalletState {
   inAppBrowser: WalletBrowser | null;
   /** Freighter mobile's browser only connects via WalletConnect, which isn't configured here. */
   needsWalletConnect: boolean;
+  /** Built-in testnet wallet stored in this browser (null when none). */
+  localWallet: LocalWalletInfo | null;
+  isLocal: boolean;
+  /** Create (or reuse) the built-in testnet wallet, connect it and run auto-setup. */
+  startTestnetWallet: () => Promise<void>;
+  importTestnetWallet: (secret: string) => Promise<void>;
+  forgetTestnetWallet: () => Promise<void>;
 }
 
 const WalletContext = createContext<WalletState | null>(null);
@@ -59,6 +79,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const kitRef = useRef<WalletKit | null>(null);
+  const [localWallet, setLocalWallet] = useState<LocalWalletInfo | null>(null);
+  useEffect(() => {
+    const sync = () => setLocalWallet(localWalletInfo());
+    sync();
+    return onLocalWalletChange(sync);
+  }, []);
   const [inAppBrowser, setInAppBrowser] = useState<WalletBrowser | null>(null);
   const needsWalletConnect = !!inAppBrowser && inAppBrowser.provider === "freighter" && !walletConnectProjectId;
 
@@ -110,6 +136,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         kitRef.current = kit;
         const { address: a } = await kit.getAddress();
         if (cancelled) return;
+        if (saved === LOCAL_WALLET_ID) {
+          if (localWalletInfo()?.publicKey !== a) {
+            kit.disconnect().catch(() => {});
+            return;
+          }
+          // Setup interrupted (page closed mid-way)? Finish funding/trustline quietly.
+          getAccountStatus(a)
+            .then((st) => {
+              if (!st.exists || !st.hasTrustline) runLocalSetup(a);
+            })
+            .catch(() => {});
+        }
         if (saved === "wallet_connect") {
           // The kit remembers the address; the WalletConnect session itself lives in the SignClient.
           // Only treat the wallet as connected if that session is still alive on Testnet.
@@ -189,6 +227,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         const picked = kit.authModal();
         setConnecting(false); // the picker (or the wallet's own prompt) is on screen now
         ({ address: a } = await picked);
+        // Picked the built-in wallet and it was just created: fund + trustline + test USDC.
+        if (selectedId(kit) === LOCAL_WALLET_ID && consumeFreshLocalWallet()) runLocalSetup(a);
       }
       setAddress(a);
       setWalletId(selectedId(kit));
@@ -224,6 +264,46 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [refreshNetwork],
   );
 
+  /** Connect the built-in testnet wallet through the kit (so every signing flow routes to it). */
+  const connectLocal = useCallback(
+    async (setupAfter: boolean) => {
+      setError(null);
+      setConnecting(true);
+      try {
+        const kit = await withDeadline(loadWalletKit(), 9500, "Couldn't load the wallet code. Check the connection and try again.");
+        kitRef.current = kit;
+        dismissWcSheet();
+        kit.setWallet(LOCAL_WALLET_ID);
+        const { address: a } = await kit.fetchAddress();
+        consumeFreshLocalWallet();
+        setAddress(a);
+        setWalletId(LOCAL_WALLET_ID);
+        await refreshNetwork(kit);
+        if (setupAfter) runLocalSetup(a);
+      } catch (e) {
+        setError(kitError(e).message);
+        throw e;
+      } finally {
+        setConnecting(false);
+      }
+    },
+    [refreshNetwork],
+  );
+
+  const startTestnetWallet = useCallback(async () => {
+    if (!localWalletInfo()) createLocalWallet();
+    // New wallets get the full setup; existing ones only fill in what's missing.
+    await connectLocal(true).catch(() => {});
+  }, [connectLocal]);
+
+  const importTestnetWallet = useCallback(
+    async (secret: string) => {
+      importLocalWallet(secret); // throws on an invalid key (shown by the dialog)
+      await connectLocal(true);
+    },
+    [connectLocal],
+  );
+
   const disconnect = useCallback(async () => {
     try {
       await (kitRef.current ?? (await loadWalletKit())).disconnect();
@@ -234,6 +314,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setPassphrase(null);
     setError(null);
   }, []);
+
+  const forgetTestnetWallet = useCallback(async () => {
+    if (walletId === LOCAL_WALLET_ID) await disconnect();
+    forgetLocalWallet();
+  }, [walletId, disconnect]);
 
   const value = useMemo<WalletState>(
     () => ({
@@ -255,6 +340,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       disconnect,
       inAppBrowser,
       needsWalletConnect,
+      localWallet,
+      isLocal: walletId === LOCAL_WALLET_ID,
+      startTestnetWallet,
+      importTestnetWallet,
+      forgetTestnetWallet,
     }),
     [
       ready,
@@ -269,6 +359,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       disconnect,
       inAppBrowser,
       needsWalletConnect,
+      localWallet,
+      startTestnetWallet,
+      importTestnetWallet,
+      forgetTestnetWallet,
     ],
   );
 
@@ -277,6 +371,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       {children}
       <WcConnectSheet />
       <WalletDebugPanel />
+      <LocalWalletLayer />
     </WalletContext.Provider>
   );
 }

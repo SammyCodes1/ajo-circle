@@ -7,6 +7,7 @@ import { AccountStatus, addTrustline, BALANCES_EVENT, fundWithFriendbot, getAcco
 import { config } from "@/lib/config";
 import { formatAmount } from "@/lib/format";
 import { friendlyError } from "@/lib/errors";
+import { GetTestUsdc, useFaucetInfo } from "./LocalWallet";
 
 /** Shows the connected account's testnet readiness: XLM, USDC trustline, USDC balance. */
 export function useAccountStatus() {
@@ -38,6 +39,7 @@ export function AccountPanel({ need }: { need?: bigint }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<React.ReactNode>(null);
   const [err, setErr] = useState<string | null>(null);
+  const faucet = useFaucetInfo();
 
   if (!w.address) return null;
 
@@ -141,9 +143,15 @@ export function AccountPanel({ need }: { need?: bigint }) {
       )}
       {low && (
         <Alert tone="warn" title="Low balance">
-          You have {formatAmount(status!.tokenBalance)} {config.tokenCode} but need {formatAmount(need!)}. Ask the
-          demo operator to run{" "}
-          <code className="break-all font-mono text-xs">./scripts/fund-test-usdc.sh {w.address}</code>
+          You have {formatAmount(status!.tokenBalance)} {config.tokenCode} but need {formatAmount(need!)}.
+          {faucet?.enabled ? (
+            <GetTestUsdc address={w.address} className="mt-2.5 max-w-xs" />
+          ) : (
+            <>
+              {" "}Ask the demo operator to run{" "}
+              <code className="break-all font-mono text-xs">./scripts/fund-test-usdc.sh {w.address}</code>
+            </>
+          )}
         </Alert>
       )}
       {msg && <Alert tone="success">{msg}</Alert>}

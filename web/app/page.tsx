@@ -9,6 +9,7 @@ import { AdirePattern } from "@/components/Brand";
 import { RotationRing } from "@/components/RotationRing";
 import { CircleCard, CircleCardSkeleton } from "@/components/CircleCard";
 import { useWallet } from "@/components/WalletProvider";
+import { LocalWalletCta } from "@/components/LocalWallet";
 
 const DEMO = [
   { address: "GADE…", received: true },
@@ -85,6 +86,9 @@ export default function Home() {
             >
               Contract on stellar.expert ↗
             </a>
+          </div>
+          <div className="mt-6 max-w-[34rem]">
+            <LocalWalletCta />
           </div>
         </div>
 

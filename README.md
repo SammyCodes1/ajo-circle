@@ -145,6 +145,25 @@ The web app uses **[Stellar Wallets Kit](https://stellarwalletskit.dev/)** (`@cr
   - Without it, the app detects Freighter's in-app browser, explains why it can't connect there and offers **Connect with Albedo** instead — it never shows an "Install Freighter" prompt. In any wallet in-app browser, extension-only wallets and *Install* labels are hidden from the picker.
 - The kit is loaded with dynamic `import()` on the client only (SSR-safe). Without a WalletConnect project id, `next.config.ts` aliases the kit's WalletConnect module to a stub so the Reown/WalletConnect bundle is never shipped.
 
+### Built-in testnet wallet (no app needed)
+
+For phones without a Stellar wallet (or networks where WalletConnect can't reach its relay), Ajo Circle ships a **testnet-only browser wallet**: *Create testnet wallet* on the home page, or *Ajo testnet wallet (built-in)* in the wallet picker.
+
+- The keypair is generated in the browser (`@stellar/stellar-sdk`) and the secret is stored **only in this browser's localStorage** (`ajo:testnet-wallet:v1`, labelled testnet-only). It is never sent anywhere; signing happens locally and refuses any network but Stellar Testnet (`web/lib/localWallet.ts`).
+- On create it runs **auto-setup**: Friendbot → USDC trustline (signed locally) → test USDC from `/api/faucet`. Interrupted setups finish on the next visit.
+- It is a Stellar Wallets Kit module, so create / contribute / payout / trustline all sign through the same path as other wallets, with no popups. *Ask before signing* (wallet menu) shows a confirm sheet describing each transaction.
+- Wallet menu: back up / show the secret (after a warning), *Get test USDC*, *Forget this wallet*. *Import a testnet key* lets you use an existing funded testnet account.
+
+**Faucet (`/api/faucet`)** — `GET` reports whether it's enabled; `POST {address}` sends `FAUCET_AMOUNT` (default 100) test USDC from the account whose secret is in the **server-only** env var `FAUCET_SECRET`. Testnet passphrase only, destination must exist and hold the USDC trustline (and have < 1,000), max once per address per 10 min, 3 per IP per 10 min, 120 per instance per hour (in-memory, best effort on serverless). Without `FAUCET_SECRET` the faucet is hidden and the app says to ask the admin. Use a dedicated distributor, not the issuer:
+
+```bash
+stellar keys generate ajo-faucet --network testnet --fund
+stellar tx new change-trust --source-account ajo-faucet --line USDC:$TOKEN_ISSUER --network testnet
+stellar tx new payment --source-account ajo-issuer --destination ajo-faucet \
+  --asset USDC:$TOKEN_ISSUER --amount 1000000000000 --network testnet   # 100,000 test USDC
+stellar keys show ajo-faucet   # the value for FAUCET_SECRET (Vercel → Settings → Environment Variables)
+```
+
 ## Run it
 
 ### Prerequisites

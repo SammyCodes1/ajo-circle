@@ -5,6 +5,7 @@
 import type { StellarWalletsKit as Kit } from "@creit.tech/stellar-wallets-kit/sdk";
 import type { ModuleInterface, Networks, SwkAppTheme } from "@creit.tech/stellar-wallets-kit/types";
 import { config } from "./config";
+import { LOCAL_WALLET_NAME, LOCAL_WALLET_SUPPORTED, LocalWalletModule } from "./localWallet";
 import { attachWc, setWcDebug, watchRelay, type WcModuleLike } from "./wcSession";
 
 export type WalletKit = typeof Kit;
@@ -128,9 +129,13 @@ export function loadWalletKit(): Promise<WalletKit> {
     // Inside a wallet's in-app browser, browser extensions can never be installed, so only
     // offer wallets that work there (WalletConnect wrapper, Albedo web, xBull PWA) and
     // never show "Install" prompts.
+    // The built-in testnet wallet (lib/localWallet.ts) comes first everywhere: it needs no app,
+    // no extension and no WalletConnect relay.
+    const local: ModuleInterface[] = LOCAL_WALLET_SUPPORTED ? [new LocalWalletModule() as unknown as ModuleInterface] : [];
     const modules: ModuleInterface[] = inApp
-      ? [new albedo.AlbedoModule(), new xbull.xBullModule()]
+      ? [...local, new albedo.AlbedoModule(), new xbull.xBullModule()]
       : [
+          ...local,
           new freighter.FreighterModule(),
           new albedo.AlbedoModule(),
           new xbull.xBullModule(),
@@ -196,4 +201,5 @@ export const WALLET_NAMES: Record<string, string> = {
   hana: "Hana",
   rabet: "Rabet",
   wallet_connect: "WalletConnect",
+  ajo_testnet: LOCAL_WALLET_NAME,
 };

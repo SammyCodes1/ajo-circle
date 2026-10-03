@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useWallet } from "./WalletProvider";
+import { LOCAL_WALLET_SUPPORTED } from "@/lib/localWallet";
 import {
   dismissWcSheet,
   retryHandoff,
@@ -90,6 +91,18 @@ export function WcConnectSheet() {
               </button>
             </>
           )}
+          {pending.phase !== "error" && LOCAL_WALLET_SUPPORTED && (
+            <button
+              type="button"
+              onClick={() => {
+                dismissWcSheet();
+                w.startTestnetWallet();
+              }}
+              className={`${btn} border border-line-strong bg-white text-ink`}
+            >
+              Use built-in testnet wallet
+            </button>
+          )}
           {pending.phase === "error" && (
             <>
               <button
@@ -102,15 +115,27 @@ export function WcConnectSheet() {
               >
                 Try again
               </button>
+              {LOCAL_WALLET_SUPPORTED && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    dismissWcSheet();
+                    w.startTestnetWallet();
+                  }}
+                  className={`${btn} border border-line-strong bg-white text-ink`}
+                >
+                  Use built-in testnet wallet
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   dismissWcSheet();
                   w.connectWith("albedo");
                 }}
-                className={`${btn} border border-line-strong bg-white text-ink`}
+                className={`${btn} text-ink-soft underline underline-offset-2`}
               >
-                Use Albedo instead
+                Albedo
               </button>
             </>
           )}

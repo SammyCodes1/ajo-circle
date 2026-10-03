@@ -29,7 +29,15 @@ export function Banners() {
           >
             connect any Stellar wallet
           </button>{" "}
-          — Freighter, xBull, LOBSTR and more, or Albedo right in the browser with nothing to install.
+          — Freighter, xBull, LOBSTR and more — or{" "}
+          <button
+            type="button"
+            onClick={() => w.startTestnetWallet()}
+            className="font-medium text-clay-deep underline underline-offset-2 hover:text-clay-strong"
+          >
+            {w.localWallet ? "use your built-in testnet wallet" : "create a built-in testnet wallet"}
+          </button>{" "}
+          right here, nothing to install.
         </Alert>
       )}
       {wcNote && (
@@ -37,7 +45,15 @@ export function Banners() {
           Freighter mobile connects to web apps through WalletConnect, which this deployment hasn’t enabled yet, so
           it can’t sign here. You can still connect with Albedo (works in any browser), or open Ajo Circle on a
           computer with the Freighter extension.
-          <span className="mt-2.5 flex">
+          <span className="mt-2.5 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => w.startTestnetWallet()}
+              disabled={w.connecting}
+              className="press inline-flex min-h-11 items-center rounded-lg bg-ink px-4 text-sm font-medium text-ivory hover:bg-ink-soft disabled:bg-sand disabled:text-muted"
+            >
+              Use built-in testnet wallet
+            </button>
             <button
               type="button"
               onClick={() => w.connectWith("albedo")}
