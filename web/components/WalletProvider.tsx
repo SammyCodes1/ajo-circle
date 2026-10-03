@@ -12,6 +12,8 @@ import {
   type WalletBrowser,
   type WalletKit,
 } from "@/lib/walletKit";
+import { setWcDebug, testnetSession, waitSignClient } from "@/lib/wcSession";
+import { WalletDebugPanel, WcConnectSheet } from "./WcConnectSheet";
 
 interface WalletState {
   /** true once we know whether a previous session exists (avoids header flicker). */
@@ -64,6 +66,15 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const b = walletBrowser();
     setInAppBrowser(b);
+    setWcDebug(
+      {
+        inApp: b ? `${b.provider}/${b.platform} v${b.version ?? "?"}` : "no",
+        marker: JSON.stringify((window as unknown as { stellar?: unknown }).stellar ?? null),
+        ua: navigator.userAgent,
+        projectId: !!walletConnectProjectId,
+      },
+      "page loaded",
+    );
     // Inside a wallet browser the user is here to connect: start WalletConnect's relay
     // handshake now so the first tap pairs immediately.
     if (b && walletConnectProjectId) waitForWalletConnect().catch(() => {});
@@ -96,6 +107,20 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         kitRef.current = kit;
         const { address: a } = await kit.getAddress();
         if (cancelled) return;
+        if (saved === "wallet_connect") {
+          // The kit remembers the address; the WalletConnect session itself lives in the SignClient.
+          // Only treat the wallet as connected if that session is still alive on Testnet.
+          const client = await waitSignClient(10000).catch(() => null);
+          if (cancelled) return;
+          const live = client ? testnetSession(client) : null;
+          if (!live) {
+            kit.disconnect().catch(() => {});
+            return;
+          }
+          setAddress(live.address);
+          setWalletId("wallet_connect");
+          return;
+        }
         setAddress(a);
         setWalletId(selectedId(kit));
         await refreshNetwork(kit);
@@ -147,7 +172,15 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           );
         }
       }
-      const { address: a } = await kit.authModal();
+      let a: string;
+      if (inFreighterMobile()) {
+        // Freighter's in-app browser: nothing to pick. Skip the kit picker and the AppKit modal and
+        // hand the WalletConnect pairing link straight to Freighter (see lib/wcSession.ts).
+        kit.setWallet("wallet_connect");
+        ({ address: a } = await kit.fetchAddress());
+      } else {
+        ({ address: a } = await kit.authModal());
+      }
       setAddress(a);
       setWalletId(selectedId(kit));
       await refreshNetwork(kit);
@@ -229,7 +262,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     ],
   );
 
-  return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
+  return (
+    <WalletContext.Provider value={value}>
+      {children}
+      <WcConnectSheet />
+      <WalletDebugPanel />
+    </WalletContext.Provider>
+  );
 }
 
 export function useWallet(): WalletState {

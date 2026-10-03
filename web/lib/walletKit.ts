@@ -5,6 +5,7 @@
 import type { StellarWalletsKit as Kit } from "@creit.tech/stellar-wallets-kit/sdk";
 import type { ModuleInterface, Networks, SwkAppTheme } from "@creit.tech/stellar-wallets-kit/types";
 import { config } from "./config";
+import { attachWc, setWcDebug, type WcModuleLike } from "./wcSession";
 
 export type WalletKit = typeof Kit;
 
@@ -63,18 +64,9 @@ const STELLAR_WC_WALLETS = [
   "9c78aee7d8a771255942334d06d2cbab89e2178ee49fee4ea3b6c78032fcac76", // Scopuly
 ];
 
-/**
- * Freighter mobile's WalletConnect deep link, as registered in the WalletConnect explorer
- * (mobile.native = "freighterwallet://wc-redirect") and formatted the way AppKit's
- * CoreHelperUtil.formatNativeUrl does: `${native}/wc?uri=${encodeURIComponent(uri)}`.
- * The app pairs any incoming URL containing that prefix (useWalletKitEventsManager.onDeepLink).
- */
-export const freighterWcDeepLink = (uri: string) => `freighterwallet://wc-redirect/wc?uri=${encodeURIComponent(uri)}`;
+export { freighterWcDeepLink } from "./wcSession";
 
-type WcModule = ModuleInterface & {
-  isAvailable(): Promise<boolean>;
-  modal?: { open: (o?: { uri?: string }) => Promise<unknown> | unknown };
-};
+type WcModule = ModuleInterface & { isAvailable(): Promise<boolean> };
 let wcModule: WcModule | null = null;
 let baseModules: ModuleInterface[] = [];
 let wcDropped = false;
@@ -113,6 +105,15 @@ export function loadWalletKit(): Promise<WalletKit> {
       import("@creit.tech/stellar-wallets-kit/modules/rabet"),
     ]);
     const inApp = walletBrowser();
+    setWcDebug(
+      {
+        inApp: inApp ? `${inApp.provider}/${inApp.platform} v${inApp.version ?? "?"}` : "no",
+        marker: JSON.stringify((window as unknown as { stellar?: unknown }).stellar ?? null),
+        ua: navigator.userAgent,
+        projectId: !!walletConnectProjectId,
+      },
+      "kit loading",
+    );
     // Order = order in the picker (installed wallets first, then the rest).
     // Inside a wallet's in-app browser, browser extensions can never be installed, so only
     // offer wallets that work there (WalletConnect wrapper, Albedo web, xBull PWA) and
@@ -148,18 +149,9 @@ export function loadWalletKit(): Promise<WalletKit> {
           appKitOptions: { includeWalletIds: STELLAR_WC_WALLETS, featuredWalletIds: STELLAR_WC_WALLETS } as any,
         }) as unknown as WcModule;
       wcModule = mod;
-      if (inApp?.provider === "freighter" && mod.modal) {
-        // Inside Freighter's own browser there is nothing to choose: hand the pairing URI straight
-        // to the app via its deep link instead of showing the wallet list/QR.
-        const open = mod.modal.open.bind(mod.modal);
-        mod.modal.open = (o?: { uri?: string }) => {
-          if (o?.uri) {
-            window.location.href = freighterWcDeepLink(o.uri);
-            return Promise.resolve();
-          }
-          return open(o);
-        };
-      }
+      // Our own proposal / handoff / timeout / signing on top of the kit's SignClient + AppKit
+      // (see lib/wcSession.ts for why the kit's built-in flow can hang with Freighter).
+      attachWc(mod as unknown as WcModuleLike, inApp?.provider === "freighter");
       modules[inApp ? "unshift" : "push"](mod);
     }
     StellarWalletsKit.init({
