@@ -3,28 +3,31 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, AuthorizedFunction, Ledger},
+    testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation, Ledger},
     token::{StellarAssetClient, TokenClient},
     vec, Address, Env, IntoVal, Symbol,
 };
 
-const CONTRIB: i128 = 100_0000000; // 100 USDC (7 decimals)
-const PERIOD: u64 = 7 * 24 * 60 * 60; // one week
-const JOIN: u64 = 24 * 60 * 60; // one day
+/// 10 USDC (7 decimals).
+const C: i128 = 100_000_000;
+const PERIOD: u64 = 3_600;
+const JOIN: u64 = 86_400;
+const T0: u64 = 1_000_000;
 
-struct Setup<'a> {
-    env: Env,
-    client: AjoContractClient<'a>,
-    token: TokenClient<'a>,
-    admin: Address,
-    members: Vec<Address>,
-    contract: Address,
+pub(crate) struct Setup<'a> {
+    pub env: Env,
+    pub client: AjoContractClient<'a>,
+    pub token: TokenClient<'a>,
+    pub admin: Address,
+    pub members: Vec<Address>,
+    pub contract: Address,
+    pub start: i128,
 }
 
-fn setup(n: u32) -> Setup<'static> {
+pub(crate) fn setup(n: u32, start_balance: i128) -> Setup<'static> {
     let env = Env::default();
     env.mock_all_auths();
-    env.ledger().set_timestamp(1_000_000);
+    env.ledger().set_timestamp(T0);
 
     let issuer = Address::generate(&env);
     let sac = env.register_stellar_asset_contract_v2(issuer);
@@ -34,7 +37,7 @@ fn setup(n: u32) -> Setup<'static> {
     let mut members = Vec::new(&env);
     for _ in 0..n {
         let m = Address::generate(&env);
-        sac_admin.mint(&m, &(CONTRIB * 10));
+        sac_admin.mint(&m, &start_balance);
         members.push_back(m);
     }
 
@@ -48,305 +51,46 @@ fn setup(n: u32) -> Setup<'static> {
         admin,
         members,
         contract,
+        start: start_balance,
     }
+}
+
+/// Default setup: enough balance for every contribution plus R_0.
+fn setup_n(n: u32) -> Setup<'static> {
+    setup(n, C * i128::from(2 * n))
+}
+
+fn mem(s: &Setup, i: u32) -> Address {
+    s.members.get(i).unwrap()
 }
 
 fn create(s: &Setup) -> u32 {
     s.client
-        .create_circle(&s.admin, &CONTRIB, &s.members, &PERIOD, &JOIN)
+        .create_circle(&s.admin, &C, &s.members, &PERIOD, &JOIN)
 }
 
-#[test]
-fn full_happy_cycle() {
-    let s = setup(3);
-    let id = create(&s);
-    // create_circle required the admin's auth (auths() reflects the last call)
-    assert_eq!(s.env.auths()[0].0, s.admin);
-    assert_eq!(id, 0);
-    assert_eq!(s.client.circle_count(), 1);
-
-    for round in 0..3u32 {
-        let st = s.client.get_round_status(&id, &round);
-        assert_eq!(st.recipient, s.members.get(round).unwrap());
-        assert_eq!(st.deadline, s.client.get_circle(&id).round_start + PERIOD);
-        assert!(!st.payout_ready);
-
-        for m in s.members.iter() {
-            s.client.contribute(&id, &m);
-        }
-        // contribute requires the member's auth for exactly this call
-        let last = s.members.get(2).unwrap();
-        assert_eq!(
-            s.env.auths()[0],
-            (
-                last.clone(),
-                soroban_sdk::testutils::AuthorizedInvocation {
-                    function: AuthorizedFunction::Contract((
-                        s.contract.clone(),
-                        Symbol::new(&s.env, "contribute"),
-                        (id, last.clone()).into_val(&s.env),
-                    )),
-                    sub_invocations: std::vec![soroban_sdk::testutils::AuthorizedInvocation {
-                        function: AuthorizedFunction::Contract((
-                            s.token.address.clone(),
-                            Symbol::new(&s.env, "transfer"),
-                            (last.clone(), s.contract.clone(), CONTRIB).into_val(&s.env),
-                        )),
-                        sub_invocations: std::vec![],
-                    }],
-                }
-            )
-        );
-
-        let st = s.client.get_round_status(&id, &round);
-        assert_eq!(st.paid.len(), 3);
-        assert_eq!(st.unpaid.len(), 0);
-        assert!(st.payout_ready);
-        assert_eq!(s.token.balance(&s.contract), CONTRIB * 3);
-
-        // all paid -> payout allowed immediately, before the deadline
-        let paid = s.client.payout(&id);
-        assert_eq!(paid, CONTRIB * 3);
-        assert_eq!(s.token.balance(&s.contract), 0);
-
-        let settled = s.client.get_round_status(&id, &round);
-        assert!(settled.settled);
-        assert_eq!(settled.defaulted.len(), 0);
-        assert_eq!(settled.pot, CONTRIB * 3);
+/// Create a circle and have every member accept with `posts[i]` collateral.
+fn start(s: &Setup, posts: &[i128]) -> u32 {
+    let id = create(s);
+    for (i, p) in posts.iter().enumerate() {
+        s.client.accept(&id, &mem(s, i as u32), p);
     }
-
-    // everyone paid 3x and received 3x -> net zero
-    for m in s.members.iter() {
-        assert_eq!(s.token.balance(&m), CONTRIB * 10);
-        let rec = s.client.get_member_record(&id, &m);
-        assert_eq!(rec.paid, 3);
-        assert_eq!(rec.missed, 0);
-        assert_eq!(rec.received, CONTRIB * 3);
-    }
-    let c = s.client.get_circle(&id);
-    assert_eq!(c.status, CircleStatus::Completed);
-    assert_eq!(c.round, 3);
+    id
 }
 
-#[test]
-fn duplicate_contribution_rejected() {
-    let s = setup(3);
-    let id = create(&s);
-    let m = s.members.get(0).unwrap();
-    s.client.contribute(&id, &m);
-    assert_eq!(
-        s.client.try_contribute(&id, &m),
-        Err(Ok(Error::AlreadyContributed))
-    );
-    // only charged once
-    assert_eq!(s.token.balance(&s.contract), CONTRIB);
+fn state(s: &Setup, id: u32, i: u32) -> MemberState {
+    s.client.get_member_state(&id, &mem(s, i))
 }
 
-#[test]
-fn non_member_rejected() {
-    let s = setup(3);
-    let id = create(&s);
-    let outsider = Address::generate(&s.env);
-    assert_eq!(
-        s.client.try_contribute(&id, &outsider),
-        Err(Ok(Error::NotMember))
-    );
-    assert_eq!(
-        s.client.try_get_member_record(&id, &outsider),
-        Err(Ok(Error::NotMember))
-    );
+fn set_time(s: &Setup, t: u64) {
+    s.env.ledger().set_timestamp(t);
 }
 
-#[test]
-fn unknown_circle_rejected() {
-    let s = setup(2);
-    let m = s.members.get(0).unwrap();
-    assert_eq!(
-        s.client.try_contribute(&7, &m),
-        Err(Ok(Error::CircleNotFound))
-    );
-    assert_eq!(s.client.try_payout(&7), Err(Ok(Error::CircleNotFound)));
-}
-
-#[test]
-fn payout_before_ready_rejected() {
-    let s = setup(3);
-    let id = create(&s);
-    // nobody paid
-    assert_eq!(s.client.try_payout(&id), Err(Ok(Error::PayoutNotReady)));
-    // two of three paid, deadline not reached
-    s.client.contribute(&id, &s.members.get(0).unwrap());
-    s.client.contribute(&id, &s.members.get(1).unwrap());
-    s.env.ledger().set_timestamp(1_000_000 + PERIOD - 1);
-    assert_eq!(s.client.try_payout(&id), Err(Ok(Error::PayoutNotReady)));
-    assert!(!s.client.get_round_status(&id, &0).payout_ready);
-}
-
-#[test]
-fn default_after_period() {
-    let s = setup(3);
-    let id = create(&s);
-    let (a, b, c) = (
-        s.members.get(0).unwrap(),
-        s.members.get(1).unwrap(),
-        s.members.get(2).unwrap(),
-    );
-    s.client.contribute(&id, &a);
-    s.client.contribute(&id, &b);
-
-    // advance ledger time to the deadline
-    s.env.ledger().set_timestamp(1_000_000 + PERIOD);
-    let live = s.client.get_round_status(&id, &0);
-    assert!(live.payout_ready);
-    assert_eq!(live.unpaid, vec![&s.env, c.clone()]);
-
-    let a_before = s.token.balance(&a);
-    let paid = s.client.payout(&id);
-    assert_eq!(paid, CONTRIB * 2);
-    assert_eq!(s.token.balance(&a), a_before + CONTRIB * 2);
-
-    let r0 = s.client.get_round_status(&id, &0);
-    assert_eq!(r0.defaulted, vec![&s.env, c.clone()]);
-    assert_eq!(r0.paid, vec![&s.env, a.clone(), b.clone()]);
-
-    let rec_c = s.client.get_member_record(&id, &c);
-    assert_eq!(rec_c.missed, 1);
-    assert_eq!(rec_c.paid, 0);
-    assert_eq!(rec_c.missed_rounds, vec![&s.env, 0u32]);
-
-    // next round started at the payout time with a fresh deadline
-    let circle = s.client.get_circle(&id);
-    assert_eq!(circle.round, 1);
-    assert_eq!(circle.round_start, 1_000_000 + PERIOD);
-    let r1 = s.client.get_round_status(&id, &1);
-    assert_eq!(r1.recipient, b);
-    assert_eq!(r1.deadline, 1_000_000 + 2 * PERIOD);
-    assert_eq!(r1.paid.len(), 0);
-
-    // a round where nobody pays can still be settled after the deadline
-    s.env.ledger().set_timestamp(1_000_000 + 2 * PERIOD);
-    assert_eq!(s.client.payout(&id), 0);
-    assert_eq!(s.client.get_round_status(&id, &1).defaulted.len(), 3);
-    assert_eq!(s.client.get_member_record(&id, &c).missed, 2);
-}
-
-#[test]
-fn closes_after_final_round() {
-    let s = setup(2);
-    let id = create(&s);
-    for _ in 0..2 {
-        for m in s.members.iter() {
-            s.client.contribute(&id, &m);
-        }
-        s.client.payout(&id);
-    }
-    assert_eq!(s.client.get_circle(&id).status, CircleStatus::Completed);
-    let m = s.members.get(0).unwrap();
-    assert_eq!(
-        s.client.try_contribute(&id, &m),
-        Err(Ok(Error::CircleClosed))
-    );
-    assert_eq!(s.client.try_payout(&id), Err(Ok(Error::CircleClosed)));
-    assert_eq!(
-        s.client.try_get_round_status(&id, &2),
-        Err(Ok(Error::RoundNotFound))
-    );
-    // history stays readable
-    assert!(s.client.get_round_status(&id, &1).settled);
-}
-
-#[test]
-fn invalid_create_params() {
-    let s = setup(3);
-    let a = s.members.get(0).unwrap();
-    let b = s.members.get(1).unwrap();
-
-    // fewer than two members
-    assert_eq!(
-        s.client
-            .try_create_circle(&s.admin, &CONTRIB, &vec![&s.env, a.clone()], &PERIOD, &JOIN),
-        Err(Ok(Error::TooFewMembers))
-    );
-    assert_eq!(
-        s.client
-            .try_create_circle(&s.admin, &CONTRIB, &Vec::new(&s.env), &PERIOD, &JOIN),
-        Err(Ok(Error::TooFewMembers))
-    );
-    // duplicates
-    assert_eq!(
-        s.client.try_create_circle(
-            &s.admin,
-            &CONTRIB,
-            &vec![&s.env, a.clone(), b.clone(), a.clone()],
-            &PERIOD,
-            &JOIN
-        ),
-        Err(Ok(Error::DuplicateMember))
-    );
-    // non-positive contribution
-    assert_eq!(
-        s.client
-            .try_create_circle(&s.admin, &0, &s.members, &PERIOD, &JOIN),
-        Err(Ok(Error::InvalidContribution))
-    );
-    assert_eq!(
-        s.client
-            .try_create_circle(&s.admin, &-5, &s.members, &PERIOD, &JOIN),
-        Err(Ok(Error::InvalidContribution))
-    );
-    // zero period
-    assert_eq!(
-        s.client
-            .try_create_circle(&s.admin, &CONTRIB, &s.members, &0, &JOIN),
-        Err(Ok(Error::InvalidPeriod))
-    );
-    // too many members
-    let mut big = Vec::new(&s.env);
-    for _ in 0..(MAX_MEMBERS + 1) {
-        big.push_back(Address::generate(&s.env));
-    }
-    assert_eq!(
-        s.client
-            .try_create_circle(&s.admin, &CONTRIB, &big, &PERIOD, &JOIN),
-        Err(Ok(Error::TooManyMembers))
-    );
-    assert_eq!(s.client.circle_count(), 0);
-}
-
-#[test]
-#[should_panic]
-fn create_requires_admin_auth() {
-    let env = Env::default();
-    let issuer = Address::generate(&env);
-    let sac = env.register_stellar_asset_contract_v2(issuer);
-    let contract = env.register(AjoContract, (sac.address(),));
-    let client = AjoContractClient::new(&env, &contract);
-    let members = vec![&env, Address::generate(&env), Address::generate(&env)];
-    // no mock_all_auths -> admin.require_auth() fails
-    client.create_circle(&Address::generate(&env), &CONTRIB, &members, &PERIOD, &JOIN);
-}
-
-#[test]
-fn multiple_circles_are_independent() {
-    let s = setup(3);
-    let id0 = create(&s);
-    let two = vec![&s.env, s.members.get(1).unwrap(), s.members.get(2).unwrap()];
-    let id1 = s
-        .client
-        .create_circle(&s.admin, &CONTRIB, &two, &PERIOD, &JOIN);
-    assert_eq!((id0, id1), (0, 1));
-    s.client.contribute(&id1, &s.members.get(1).unwrap());
-    assert_eq!(s.client.get_round_status(&id0, &0).paid.len(), 0);
-    assert_eq!(s.client.get_round_status(&id1, &0).paid.len(), 1);
-    assert_eq!(
-        s.client.get_round_status(&id1, &0).recipient,
-        s.members.get(1).unwrap()
-    );
-}
+// ------------------------------------------------------- C1: create/pinning
 
 #[test]
 fn token_is_pinned() {
-    let s = setup(3);
+    let s = setup_n(3);
     // the token is fixed by the constructor; create_circle has no token argument
     assert_eq!(s.client.token(), s.token.address);
     let id = create(&s);
@@ -355,41 +99,27 @@ fn token_is_pinned() {
 
 #[test]
 fn min_period_enforced() {
-    let s = setup(3);
+    let s = setup_n(3);
     // v1 accepted a 1-second round
     assert_eq!(
-        s.client.try_create_circle(
-            &s.admin,
-            &CONTRIB,
-            &s.members,
-            &(MIN_PERIOD_SECS - 1),
-            &JOIN
-        ),
+        s.client
+            .try_create_circle(&s.admin, &C, &s.members, &(MIN_PERIOD_SECS - 1), &JOIN),
         Err(Ok(Error::InvalidPeriod))
     );
     assert_eq!(
-        s.client.try_create_circle(
-            &s.admin,
-            &CONTRIB,
-            &s.members,
-            &PERIOD,
-            &(MIN_PERIOD_SECS - 1)
-        ),
+        s.client
+            .try_create_circle(&s.admin, &C, &s.members, &PERIOD, &(MIN_PERIOD_SECS - 1)),
         Err(Ok(Error::InvalidPeriod))
     );
-    let id = s.client.create_circle(
-        &s.admin,
-        &CONTRIB,
-        &s.members,
-        &MIN_PERIOD_SECS,
-        &MIN_PERIOD_SECS,
-    );
+    let id = s
+        .client
+        .create_circle(&s.admin, &C, &s.members, &MIN_PERIOD_SECS, &MIN_PERIOD_SECS);
     assert_eq!(s.client.get_circle(&id).period_secs, MIN_PERIOD_SECS);
 }
 
 #[test]
 fn max_members_20() {
-    let s = setup(2);
+    let s = setup_n(2);
     assert_eq!(MAX_MEMBERS, 20);
     let mut big = Vec::new(&s.env);
     for _ in 0..21 {
@@ -397,31 +127,384 @@ fn max_members_20() {
     }
     assert_eq!(
         s.client
-            .try_create_circle(&s.admin, &CONTRIB, &big, &PERIOD, &JOIN),
+            .try_create_circle(&s.admin, &C, &big, &PERIOD, &JOIN),
         Err(Ok(Error::TooManyMembers))
     );
     big.pop_back();
     assert_eq!(
-        s.client
-            .create_circle(&s.admin, &CONTRIB, &big, &PERIOD, &JOIN),
+        s.client.create_circle(&s.admin, &C, &big, &PERIOD, &JOIN),
         0
     );
 }
 
 #[test]
 fn amount_too_large() {
-    let s = setup(2);
+    let s = setup_n(2);
     let c = i128::from(i64::MAX / 2);
     assert_eq!(
         s.client
             .try_create_circle(&s.admin, &c, &s.members, &PERIOD, &JOIN),
         Err(Ok(Error::AmountTooLarge))
     );
-    // c * n * 2 == i64::MAX - 1 is still fine
+    // c * n * 2 = i64::MAX - 3 is still fine
     let ok = i128::from(i64::MAX / 4);
     assert_eq!(
         s.client
             .create_circle(&s.admin, &ok, &s.members, &PERIOD, &JOIN),
         0
     );
+}
+
+#[test]
+fn invalid_create_params() {
+    let s = setup_n(3);
+    let a = mem(&s, 0);
+    let b = mem(&s, 1);
+    let try_create = |c: i128, m: &Vec<Address>, p: u64, j: u64| {
+        s.client.try_create_circle(&s.admin, &c, m, &p, &j)
+    };
+    // fewer than two members
+    assert_eq!(
+        try_create(C, &vec![&s.env, a.clone()], PERIOD, JOIN),
+        Err(Ok(Error::TooFewMembers))
+    );
+    assert_eq!(
+        try_create(C, &Vec::new(&s.env), PERIOD, JOIN),
+        Err(Ok(Error::TooFewMembers))
+    );
+    // duplicates
+    assert_eq!(
+        try_create(
+            C,
+            &vec![&s.env, a.clone(), b.clone(), a.clone()],
+            PERIOD,
+            JOIN
+        ),
+        Err(Ok(Error::DuplicateMember))
+    );
+    // non-positive contribution
+    assert_eq!(
+        try_create(0, &s.members, PERIOD, JOIN),
+        Err(Ok(Error::InvalidContribution))
+    );
+    assert_eq!(
+        try_create(-5, &s.members, PERIOD, JOIN),
+        Err(Ok(Error::InvalidContribution))
+    );
+    // zero period / window
+    assert_eq!(
+        try_create(C, &s.members, 0, JOIN),
+        Err(Ok(Error::InvalidPeriod))
+    );
+    assert_eq!(
+        try_create(C, &s.members, PERIOD, 0),
+        Err(Ok(Error::InvalidPeriod))
+    );
+    assert_eq!(s.client.circle_count(), 0);
+
+    // a valid circle starts Forming with a join deadline and a state per member
+    let id = create(&s);
+    let circle = s.client.get_circle(&id);
+    assert_eq!(circle.status, CircleStatus::Forming);
+    assert_eq!(circle.join_deadline, T0 + JOIN);
+    assert_eq!(circle.accepted, 0);
+    assert_eq!(state(&s, id, 2).slot, 2);
+    assert_eq!(s.client.circle_count(), 1);
+    // ids are sequential and circles independent
+    let two = vec![&s.env, b.clone(), mem(&s, 2)];
+    assert_eq!(
+        s.client.create_circle(&s.admin, &C, &two, &PERIOD, &JOIN),
+        1
+    );
+    assert_eq!(
+        s.client.try_get_member_state(&1, &a),
+        Err(Ok(Error::NotMember))
+    );
+    assert_eq!(s.client.try_get_circle(&7), Err(Ok(Error::CircleNotFound)));
+}
+
+// ------------------------------------------- C2: consent, forming, cancel
+
+#[test]
+fn create_requires_admin_auth_only() {
+    let s = setup_n(3);
+    let id = create(&s);
+    // only the admin signed create_circle; members did not
+    let auths = s.env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, s.admin);
+    assert_eq!(s.client.get_circle(&id).accepted, 0);
+}
+
+#[test]
+#[should_panic]
+fn create_without_admin_auth_panics() {
+    let env = Env::default();
+    let issuer = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(issuer);
+    let contract = env.register(AjoContract, (sac.address(),));
+    let client = AjoContractClient::new(&env, &contract);
+    let members = vec![&env, Address::generate(&env), Address::generate(&env)];
+    // no mock_all_auths -> admin.require_auth() fails
+    client.create_circle(&Address::generate(&env), &C, &members, &PERIOD, &JOIN);
+}
+
+#[test]
+fn accept_requires_member_auth() {
+    let s = setup_n(3);
+    let id = create(&s);
+    let a = mem(&s, 0);
+    s.client.accept(&id, &a, &(2 * C));
+    assert_eq!(
+        s.env.auths()[0],
+        (
+            a.clone(),
+            AuthorizedInvocation {
+                function: AuthorizedFunction::Contract((
+                    s.contract.clone(),
+                    Symbol::new(&s.env, "accept"),
+                    (id, a.clone(), 2 * C).into_val(&s.env),
+                )),
+                sub_invocations: std::vec![AuthorizedInvocation {
+                    function: AuthorizedFunction::Contract((
+                        s.token.address.clone(),
+                        Symbol::new(&s.env, "transfer"),
+                        (a.clone(), s.contract.clone(), 2 * C).into_val(&s.env),
+                    )),
+                    sub_invocations: std::vec![],
+                }],
+            }
+        )
+    );
+    let st = state(&s, id, 0);
+    assert!(st.accepted);
+    assert_eq!(st.collateral, 2 * C);
+    assert_eq!(st.total_in, 2 * C);
+    assert_eq!(s.token.balance(&s.contract), 2 * C);
+    assert_eq!(s.token.balance(&a), s.start - 2 * C);
+}
+
+#[test]
+#[should_panic]
+fn accept_without_member_auth_panics() {
+    let s = setup_n(3);
+    let id = create(&s);
+    s.env.set_auths(&[]);
+    s.client.accept(&id, &mem(&s, 0), &0);
+}
+
+#[test]
+fn activates_when_all_accept() {
+    let s = setup_n(3);
+    let id = create(&s);
+    s.client.accept(&id, &mem(&s, 0), &0);
+    s.client.accept(&id, &mem(&s, 1), &0);
+    assert_eq!(s.client.get_circle(&id).status, CircleStatus::Forming);
+    set_time(&s, T0 + 100);
+    s.client.accept(&id, &mem(&s, 2), &0);
+    let circle = s.client.get_circle(&id);
+    assert_eq!(circle.status, CircleStatus::Active);
+    assert_eq!(circle.accepted, 3);
+    assert_eq!(circle.round_start, T0 + 100);
+    assert_eq!(
+        s.client.get_round_status(&id, &0).deadline,
+        T0 + 100 + PERIOD
+    );
+}
+
+#[test]
+fn contribute_before_active_rejected() {
+    let s = setup_n(3);
+    let id = create(&s);
+    s.client.accept(&id, &mem(&s, 0), &0);
+    assert_eq!(
+        s.client.try_contribute(&id, &mem(&s, 0)),
+        Err(Ok(Error::NotActive))
+    );
+    assert_eq!(
+        s.client.try_post_collateral(&id, &mem(&s, 0), &C),
+        Err(Ok(Error::NotActive))
+    );
+}
+
+#[test]
+fn accept_twice_rejected() {
+    let s = setup_n(3);
+    let id = create(&s);
+    s.client.accept(&id, &mem(&s, 1), &C);
+    assert_eq!(
+        s.client.try_accept(&id, &mem(&s, 1), &0),
+        Err(Ok(Error::AlreadyAccepted))
+    );
+    assert_eq!(state(&s, id, 1).collateral, C);
+}
+
+#[test]
+fn accept_after_window_rejected() {
+    let s = setup_n(3);
+    let id = create(&s);
+    set_time(&s, T0 + JOIN);
+    s.client.accept(&id, &mem(&s, 0), &0); // at the deadline: still ok
+    set_time(&s, T0 + JOIN + 1);
+    assert_eq!(
+        s.client.try_accept(&id, &mem(&s, 1), &0),
+        Err(Ok(Error::JoinWindowClosed))
+    );
+}
+
+#[test]
+fn non_member_accept_rejected() {
+    let s = setup_n(3);
+    let id = create(&s);
+    let outsider = Address::generate(&s.env);
+    assert_eq!(
+        s.client.try_accept(&id, &outsider, &0),
+        Err(Ok(Error::NotMember))
+    );
+    assert_eq!(
+        s.client.try_accept(&9, &outsider, &0),
+        Err(Ok(Error::CircleNotFound))
+    );
+    let id2 = start(&s, &[0, 0, 0]);
+    assert_eq!(
+        s.client.try_accept(&id2, &mem(&s, 0), &0),
+        Err(Ok(Error::NotForming))
+    );
+    assert_eq!(
+        s.client.try_contribute(&id2, &outsider),
+        Err(Ok(Error::NotMember))
+    );
+}
+
+#[test]
+fn collateral_validation() {
+    let s = setup_n(3);
+    let id = create(&s);
+    let (a, b, c) = (mem(&s, 0), mem(&s, 1), mem(&s, 2));
+    // R = [2c, c, 0]
+    for bad in [-C, C / 2, C + 1, 3 * C] {
+        assert_eq!(
+            s.client.try_accept(&id, &a, &bad),
+            Err(Ok(Error::InvalidCollateral))
+        );
+    }
+    assert_eq!(
+        s.client.try_accept(&id, &b, &(2 * C)),
+        Err(Ok(Error::InvalidCollateral))
+    );
+    assert_eq!(
+        s.client.try_accept(&id, &c, &C),
+        Err(Ok(Error::InvalidCollateral))
+    );
+    s.client.accept(&id, &a, &C);
+    s.client.accept(&id, &b, &0);
+    s.client.accept(&id, &c, &0);
+
+    // Active, before receiving: cap is R_slot
+    assert_eq!(
+        s.client.try_post_collateral(&id, &a, &0),
+        Err(Ok(Error::InvalidCollateral))
+    );
+    assert_eq!(
+        s.client.try_post_collateral(&id, &a, &(C / 2)),
+        Err(Ok(Error::InvalidCollateral))
+    );
+    assert_eq!(
+        s.client.try_post_collateral(&id, &a, &(2 * C)),
+        Err(Ok(Error::InvalidCollateral))
+    );
+    assert_eq!(
+        s.client.try_post_collateral(&id, &c, &C),
+        Err(Ok(Error::InvalidCollateral))
+    );
+    s.client.post_collateral(&id, &a, &C);
+    s.client.post_collateral(&id, &b, &C);
+    assert_eq!(state(&s, id, 0).collateral, 2 * C);
+    assert_eq!(state(&s, id, 0).total_in, 2 * C);
+    assert_eq!(s.token.balance(&s.contract), 3 * C);
+    assert_eq!(
+        s.client
+            .try_post_collateral(&id, &Address::generate(&s.env), &C),
+        Err(Ok(Error::NotMember))
+    );
+}
+
+#[test]
+fn post_collateral_cap_after_receiving_is_need() {
+    let s = setup_n(4);
+    let id = start(&s, &[0, 0, 0, 0]);
+    for i in 0..4 {
+        s.client.contribute(&id, &mem(&s, i));
+    }
+    s.client.payout(&id);
+    // A has received; now in round 1: need = c * (n - 1 - 1) = 2c
+    let a = mem(&s, 0);
+    let held = state(&s, id, 0).collateral;
+    let cap = 2 * C;
+    if held < cap {
+        assert_eq!(
+            s.client.try_post_collateral(&id, &a, &(cap - held + C)),
+            Err(Ok(Error::InvalidCollateral))
+        );
+        s.client.post_collateral(&id, &a, &(cap - held));
+    }
+    assert_eq!(state(&s, id, 0).collateral, cap);
+    assert_eq!(
+        s.client.try_post_collateral(&id, &a, &C),
+        Err(Ok(Error::InvalidCollateral))
+    );
+}
+
+#[test]
+fn cancel_refunds_collateral() {
+    let s = setup_n(3);
+    let id = create(&s);
+    s.client.accept(&id, &mem(&s, 0), &(2 * C));
+    s.client.accept(&id, &mem(&s, 1), &C);
+    // before the deadline
+    assert_eq!(s.client.try_cancel(&id), Err(Ok(Error::CancelNotAllowed)));
+    set_time(&s, T0 + JOIN);
+    assert_eq!(s.client.try_cancel(&id), Err(Ok(Error::CancelNotAllowed)));
+    set_time(&s, T0 + JOIN + 1);
+    s.client.cancel(&id); // anyone; no auth needed
+    assert!(s.env.auths().is_empty());
+    let circle = s.client.get_circle(&id);
+    assert_eq!(circle.status, CircleStatus::Cancelled);
+    assert_eq!(state(&s, id, 0).claimable, 2 * C);
+    assert_eq!(state(&s, id, 1).claimable, C);
+    assert_eq!(state(&s, id, 2).claimable, 0);
+    assert_eq!(state(&s, id, 0).collateral, 0);
+    assert_eq!(s.client.try_cancel(&id), Err(Ok(Error::NotForming)));
+    assert_eq!(
+        s.client.try_accept(&id, &mem(&s, 2), &0),
+        Err(Ok(Error::NotForming))
+    );
+    assert_eq!(
+        s.client.try_contribute(&id, &mem(&s, 0)),
+        Err(Ok(Error::CircleClosed))
+    );
+}
+
+#[test]
+fn cancel_not_allowed_once_all_accepted() {
+    let s = setup_n(2);
+    let id = start(&s, &[0, 0]);
+    set_time(&s, T0 + JOIN + 1);
+    assert_eq!(s.client.try_cancel(&id), Err(Ok(Error::NotForming)));
+}
+
+#[test]
+fn duplicate_contribution_rejected() {
+    let s = setup_n(3);
+    let id = start(&s, &[0, 0, 0]);
+    let m = mem(&s, 0);
+    s.client.contribute(&id, &m);
+    assert_eq!(
+        s.client.try_contribute(&id, &m),
+        Err(Ok(Error::AlreadyContributed))
+    );
+    // only charged once
+    assert_eq!(s.token.balance(&s.contract), C);
+    assert_eq!(state(&s, id, 0).paid, 1);
+    assert_eq!(state(&s, id, 0).total_in, C);
 }

@@ -92,8 +92,12 @@ pub enum Error {
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CircleStatus {
+    /// Created; waiting for every member to accept its slot.
+    Forming,
     Active,
     Completed,
+    /// Never started (cancel) or unwound.
+    Cancelled,
 }
 
 #[contracttype]
@@ -101,20 +105,60 @@ pub enum CircleStatus {
 pub struct Circle {
     pub id: u32,
     pub admin: Address,
+    /// Copy of the pinned token at creation (for views/UI).
     pub token: Address,
     pub contribution: i128,
+    /// Index = slot = payout round.
     pub members: Vec<Address>,
     pub period_secs: u64,
+    pub join_deadline: u64,
+    /// Number of members that accepted.
+    pub accepted: u32,
     /// Current round, 0-based. Equals `members.len()` once completed.
     pub round: u32,
-    /// Ledger timestamp at which the current round started.
+    /// Set when Active; reset to `now` at each settle.
     pub round_start: u64,
     pub created_at: u64,
     pub status: CircleStatus,
     /// Members that have contributed in the current round.
     pub paid: Vec<Address>,
-    /// Amount collected in the current round (held by the contract).
+    /// Collected in the current round, not yet settled.
     pub pot: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Debt {
+    pub creditor: Address,
+    pub amount: i128,
+    pub round: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemberState {
+    pub slot: u32,
+    pub accepted: bool,
+    /// True from the moment its round is settled.
+    pub received: bool,
+    /// Held by the contract; backs future contributions.
+    pub collateral: i128,
+    /// Withdrawable via `claim`.
+    pub claimable: i128,
+    /// Owed BY this member, FIFO (push_back on create).
+    pub debts: Vec<Debt>,
+    /// Contributions + collateral posted (token moved IN).
+    pub total_in: i128,
+    /// Everything ever added to claimable.
+    pub total_credited: i128,
+    /// Token moved OUT via claim().
+    pub total_claimed: i128,
+    /// Rounds contributed.
+    pub paid: u32,
+    pub missed: u32,
+    pub missed_rounds: Vec<u32>,
+    /// Pot credited to it in its own round (before the pipeline).
+    pub received_gross: i128,
 }
 
 #[contracttype]
@@ -132,12 +176,23 @@ pub struct RoundStatus {
     /// Members recorded as defaulted. Empty until the round is settled.
     pub defaulted: Vec<Address>,
     pub pot: i128,
-    /// True once the payout for this round has been executed.
+    /// True once this round has been settled.
     pub settled: bool,
-    /// True if `payout` can be called right now for this round.
+    /// True if `settle` can be called right now for this round.
     pub payout_ready: bool,
+    /// Sum taken from defaulters' collateral.
+    pub covered_from_collateral: i128,
+    /// Sum of new Debt amounts.
+    pub debts_created: i128,
+    /// Part of the recipient's pot used to repay its debts.
+    pub to_debts: i128,
+    /// Part moved into the recipient's collateral.
+    pub withheld: i128,
+    /// Part that reached the recipient's claimable.
+    pub to_claimable: i128,
 }
 
+/// v1-shaped member record, derived from `MemberState`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemberRecord {
@@ -145,7 +200,7 @@ pub struct MemberRecord {
     pub paid: u32,
     /// Number of rounds the member defaulted on.
     pub missed: u32,
-    /// Total amount received from payouts.
+    /// Gross pot credited in its own round.
     pub received: i128,
     /// Rounds in which the member defaulted.
     pub missed_rounds: Vec<u32>,
@@ -162,7 +217,7 @@ enum DataKey {
     Circle(u32),
     /// Persistent: settled RoundStatus by (circle id, round).
     Round(u32, u32),
-    /// Persistent: MemberRecord by (circle id, member).
+    /// Persistent: MemberState by (circle id, member).
     Member(u32, Address),
 }
 
@@ -178,6 +233,36 @@ pub struct CircleCreated {
     pub contribution: i128,
     pub members: u32,
     pub period_secs: u64,
+    pub join_deadline: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemberAccepted {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub member: Address,
+    pub slot: u32,
+    pub collateral: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CircleActivated {
+    #[topic]
+    pub circle_id: u32,
+    pub round_start: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CollateralPosted {
+    #[topic]
+    pub circle_id: u32,
+    #[topic]
+    pub member: Address,
+    pub amount: i128,
 }
 
 #[contractevent]
@@ -205,6 +290,13 @@ pub struct PaidOut {
 
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CircleCancelled {
+    #[topic]
+    pub circle_id: u32,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CircleCompleted {
     #[topic]
     pub circle_id: u32,
@@ -212,7 +304,16 @@ pub struct CircleCompleted {
 
 // ---------------------------------------------------------------- helpers
 
+fn add(a: i128, b: i128) -> i128 {
+    a.checked_add(b).expect("overflow")
+}
+
+fn mul(a: i128, b: i128) -> i128 {
+    a.checked_mul(b).expect("overflow")
+}
+
 fn extend_instance(env: &Env) {
+    // Extending the instance also extends the contract code.
     env.storage()
         .instance()
         .extend_ttl(INSTANCE_THRESHOLD, INSTANCE_EXTEND_TO);
@@ -229,42 +330,89 @@ fn extend_persistent(env: &Env, key: &DataKey) {
 }
 
 fn load_circle(env: &Env, circle_id: u32) -> Result<Circle, Error> {
-    let key = DataKey::Circle(circle_id);
-    let circle: Circle = env
-        .storage()
+    env.storage()
         .persistent()
-        .get(&key)
-        .ok_or(Error::CircleNotFound)?;
-    extend_persistent(env, &key);
-    Ok(circle)
+        .get(&DataKey::Circle(circle_id))
+        .ok_or(Error::CircleNotFound)
 }
 
 fn save_circle(env: &Env, circle: &Circle) {
-    let key = DataKey::Circle(circle.id);
-    env.storage().persistent().set(&key, circle);
-    extend_persistent(env, &key);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Circle(circle.id), circle);
 }
 
-fn load_member(env: &Env, circle_id: u32, member: &Address) -> MemberRecord {
-    let key = DataKey::Member(circle_id, member.clone());
-    match env.storage().persistent().get::<_, MemberRecord>(&key) {
-        Some(r) => {
-            extend_persistent(env, &key);
-            r
+/// Every member gets a `MemberState` at creation, so a missing entry means
+/// "not a member".
+fn load_member(env: &Env, circle_id: u32, member: &Address) -> Result<MemberState, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Member(circle_id, member.clone()))
+        .ok_or(Error::NotMember)
+}
+
+fn save_member(env: &Env, circle_id: u32, member: &Address, st: &MemberState) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Member(circle_id, member.clone()), st);
+}
+
+/// TTL bump (M11): instance + code, the circle, every member key and,
+/// optionally, every settled round of the circle.
+fn bump_circle(env: &Env, circle: &Circle, include_rounds: bool) {
+    extend_instance(env);
+    extend_persistent(env, &DataKey::Circle(circle.id));
+    for m in circle.members.iter() {
+        extend_persistent(env, &DataKey::Member(circle.id, m));
+    }
+    if include_rounds {
+        for k in 0..circle.round {
+            extend_persistent(env, &DataKey::Round(circle.id, k));
         }
-        None => MemberRecord {
-            paid: 0,
-            missed: 0,
-            received: 0,
-            missed_rounds: Vec::new(env),
-        },
     }
 }
 
-fn save_member(env: &Env, circle_id: u32, member: &Address, rec: &MemberRecord) {
-    let key = DataKey::Member(circle_id, member.clone());
-    env.storage().persistent().set(&key, rec);
-    extend_persistent(env, &key);
+fn new_member_state(env: &Env, slot: u32) -> MemberState {
+    MemberState {
+        slot,
+        accepted: false,
+        received: false,
+        collateral: 0,
+        claimable: 0,
+        debts: Vec::new(env),
+        total_in: 0,
+        total_credited: 0,
+        total_claimed: 0,
+        paid: 0,
+        missed: 0,
+        missed_rounds: Vec::new(env),
+        received_gross: 0,
+    }
+}
+
+/// Slot k's collateral target: `R_k = c * (n - 1 - k)`.
+fn r_slot(c: i128, n: u32, slot: u32) -> i128 {
+    mul(c, i128::from((n - 1).saturating_sub(slot)))
+}
+
+/// Collateral a member must hold once it has received, with `r` = the round
+/// being settled (or the current round): `c * (n - 1 - r)`, never negative.
+fn need(st: &MemberState, c: i128, n: u32, r: u32) -> i128 {
+    if st.received {
+        mul(c, i128::from((n - 1).saturating_sub(r)))
+    } else {
+        0
+    }
+}
+
+/// Raw credit: straight to claimable, no pipeline.
+fn credit_raw(st: &mut MemberState, amount: i128) {
+    st.claimable = add(st.claimable, amount);
+    st.total_credited = add(st.total_credited, amount);
+}
+
+fn valid_collateral_amount(amount: i128, c: i128) -> bool {
+    amount >= 0 && amount % c == 0
 }
 
 fn deadline(circle: &Circle) -> u64 {
@@ -287,6 +435,14 @@ fn unpaid_members(env: &Env, circle: &Circle) -> Vec<Address> {
     out
 }
 
+/// Error for calls that need an Active circle.
+fn not_active(circle: &Circle) -> Error {
+    match circle.status {
+        CircleStatus::Completed | CircleStatus::Cancelled => Error::CircleClosed,
+        _ => Error::NotActive,
+    }
+}
+
 // ---------------------------------------------------------------- contract
 
 #[contract]
@@ -303,8 +459,9 @@ impl AjoContract {
         extend_instance(&env);
     }
 
-    /// Create a new circle. `admin` must authorize. Returns the circle id.
-    /// Round 0 starts immediately; its recipient is `members[0]`.
+    /// Create a new circle in `Forming`. `admin` must authorize; the admin has
+    /// no other powers. Every member must then `accept` its slot before
+    /// `join_deadline = now + join_window_secs`. Returns the circle id.
     pub fn create_circle(
         env: Env,
         admin: Address,
@@ -350,24 +507,30 @@ impl AjoContract {
         env.storage()
             .instance()
             .set(&DataKey::CircleCount, &(id + 1));
-        extend_instance(&env);
 
         let now = env.ledger().timestamp();
+        let join_deadline = now.saturating_add(join_window_secs);
         let circle = Circle {
             id,
             admin: admin.clone(),
             token: token.clone(),
             contribution,
-            members,
+            members: members.clone(),
             period_secs,
+            join_deadline,
+            accepted: 0,
             round: 0,
-            round_start: now,
+            round_start: 0,
             created_at: now,
-            status: CircleStatus::Active,
+            status: CircleStatus::Forming,
             paid: Vec::new(&env),
             pot: 0,
         };
         save_circle(&env, &circle);
+        for (i, m) in members.iter().enumerate() {
+            save_member(&env, id, &m, &new_member_state(&env, i as u32));
+        }
+        bump_circle(&env, &circle, false);
 
         CircleCreated {
             circle_id: id,
@@ -376,62 +539,193 @@ impl AjoContract {
             contribution,
             members: n,
             period_secs,
+            join_deadline,
         }
         .publish(&env);
 
         Ok(id)
     }
 
-    /// Pay this round's contribution. `member` must authorize; transfers
-    /// `contribution` of the circle token from `member` to this contract.
-    /// Late payments are accepted until someone triggers `payout`.
-    pub fn contribute(env: Env, circle_id: u32, member: Address) -> Result<(), Error> {
+    /// Accept your slot (member auth), optionally posting collateral now:
+    /// `0 <= collateral <= R_slot`, a multiple of the contribution. When the
+    /// last member accepts, the circle becomes Active and round 0 starts.
+    pub fn accept(
+        env: Env,
+        circle_id: u32,
+        member: Address,
+        collateral: i128,
+    ) -> Result<(), Error> {
         member.require_auth();
         let mut circle = load_circle(&env, circle_id)?;
+        if circle.status != CircleStatus::Forming {
+            return Err(Error::NotForming);
+        }
+        let now = env.ledger().timestamp();
+        if now > circle.join_deadline {
+            return Err(Error::JoinWindowClosed);
+        }
+        let mut st = load_member(&env, circle_id, &member)?;
+        if st.accepted {
+            return Err(Error::AlreadyAccepted);
+        }
+        let n = circle.members.len();
+        let c = circle.contribution;
+        if !valid_collateral_amount(collateral, c) || collateral > r_slot(c, n, st.slot) {
+            return Err(Error::InvalidCollateral);
+        }
+
+        st.collateral = add(st.collateral, collateral);
+        st.total_in = add(st.total_in, collateral);
+        st.accepted = true;
+        circle.accepted += 1;
+        let activated = circle.accepted == n;
+        if activated {
+            circle.status = CircleStatus::Active;
+            circle.round_start = now;
+        }
+        save_member(&env, circle_id, &member, &st);
+        save_circle(&env, &circle);
+        bump_circle(&env, &circle, false);
+
+        if collateral > 0 {
+            token::TokenClient::new(&env, &circle.token).transfer(
+                &member,
+                env.current_contract_address(),
+                &collateral,
+            );
+        }
+
+        MemberAccepted {
+            circle_id,
+            member,
+            slot: st.slot,
+            collateral,
+        }
+        .publish(&env);
+        if activated {
+            CircleActivated {
+                circle_id,
+                round_start: now,
+            }
+            .publish(&env);
+        }
+        Ok(())
+    }
+
+    /// Post (more) collateral while Active. Cap: `R_slot` before receiving,
+    /// `need` at the current round after receiving.
+    pub fn post_collateral(
+        env: Env,
+        circle_id: u32,
+        member: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        member.require_auth();
+        let circle = load_circle(&env, circle_id)?;
         if circle.status != CircleStatus::Active {
-            return Err(Error::CircleClosed);
+            return Err(Error::NotActive);
         }
-        if !circle.members.contains(&member) {
-            return Err(Error::NotMember);
+        let mut st = load_member(&env, circle_id, &member)?;
+        let n = circle.members.len();
+        let c = circle.contribution;
+        let cap = if st.received {
+            need(&st, c, n, circle.round)
+        } else {
+            r_slot(c, n, st.slot)
+        };
+        if amount <= 0 || !valid_collateral_amount(amount, c) || add(st.collateral, amount) > cap {
+            return Err(Error::InvalidCollateral);
         }
-        if circle.paid.contains(&member) {
-            return Err(Error::AlreadyContributed);
-        }
+        st.collateral = add(st.collateral, amount);
+        st.total_in = add(st.total_in, amount);
+        save_member(&env, circle_id, &member, &st);
+        bump_circle(&env, &circle, false);
 
         token::TokenClient::new(&env, &circle.token).transfer(
             &member,
             env.current_contract_address(),
-            &circle.contribution,
+            &amount,
         );
-
-        circle.paid.push_back(member.clone());
-        circle.pot += circle.contribution;
-        save_circle(&env, &circle);
-
-        let mut rec = load_member(&env, circle_id, &member);
-        rec.paid += 1;
-        save_member(&env, circle_id, &member, &rec);
-        extend_instance(&env);
-
-        Contributed {
+        CollateralPosted {
             circle_id,
             member,
-            round: circle.round,
-            amount: circle.contribution,
+            amount,
         }
         .publish(&env);
         Ok(())
     }
 
-    /// Settle the current round. Callable by anyone once every member has
-    /// paid or the round deadline has passed. Sends the pot to
-    /// `members[round % n]`, records unpaid members as defaulted, and starts
-    /// the next round (or closes the circle after the final round).
-    /// Returns the amount paid out.
+    /// Cancel a circle that never started (anyone): Forming, past the join
+    /// deadline, not everyone accepted. Posted collateral becomes claimable.
+    pub fn cancel(env: Env, circle_id: u32) -> Result<(), Error> {
+        let mut circle = load_circle(&env, circle_id)?;
+        if circle.status != CircleStatus::Forming {
+            return Err(Error::NotForming);
+        }
+        if env.ledger().timestamp() <= circle.join_deadline
+            || circle.accepted >= circle.members.len()
+        {
+            return Err(Error::CancelNotAllowed);
+        }
+        for m in circle.members.iter() {
+            let mut st = load_member(&env, circle_id, &m)?;
+            let refund = st.collateral;
+            st.collateral = 0;
+            credit_raw(&mut st, refund);
+            save_member(&env, circle_id, &m, &st);
+        }
+        circle.status = CircleStatus::Cancelled;
+        save_circle(&env, &circle);
+        bump_circle(&env, &circle, false);
+        CircleCancelled { circle_id }.publish(&env);
+        Ok(())
+    }
+
+    /// Pay this round's contribution. `member` must authorize; transfers
+    /// `contribution` of the pinned token from `member` to this contract.
+    /// Late payments are accepted until someone settles the round.
+    pub fn contribute(env: Env, circle_id: u32, member: Address) -> Result<(), Error> {
+        member.require_auth();
+        let mut circle = load_circle(&env, circle_id)?;
+        if circle.status != CircleStatus::Active {
+            return Err(not_active(&circle));
+        }
+        let mut st = load_member(&env, circle_id, &member)?;
+        if circle.paid.contains(&member) {
+            return Err(Error::AlreadyContributed);
+        }
+        let c = circle.contribution;
+        circle.paid.push_back(member.clone());
+        circle.pot = add(circle.pot, c);
+        st.total_in = add(st.total_in, c);
+        st.paid += 1;
+        save_member(&env, circle_id, &member, &st);
+        save_circle(&env, &circle);
+        bump_circle(&env, &circle, false);
+
+        token::TokenClient::new(&env, &circle.token).transfer(
+            &member,
+            env.current_contract_address(),
+            &c,
+        );
+
+        Contributed {
+            circle_id,
+            member,
+            round: circle.round,
+            amount: c,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Settle the current round (interim: the whole pot is credited to the
+    /// recipient's claimable; collateral cover and debts come next).
+    /// Callable by anyone once every member has paid or the deadline passed.
     pub fn payout(env: Env, circle_id: u32) -> Result<i128, Error> {
         let mut circle = load_circle(&env, circle_id)?;
         if circle.status != CircleStatus::Active {
-            return Err(Error::CircleClosed);
+            return Err(not_active(&circle));
         }
         if !is_ready(&env, &circle) {
             return Err(Error::PayoutNotReady);
@@ -439,30 +733,22 @@ impl AjoContract {
 
         let n = circle.members.len();
         let round = circle.round;
-        let recipient = circle.members.get_unchecked(round % n);
+        let recipient = circle.members.get_unchecked(round);
         let amount = circle.pot;
         let defaulted = unpaid_members(&env, &circle);
 
-        if amount > 0 {
-            token::TokenClient::new(&env, &circle.token).transfer(
-                &env.current_contract_address(),
-                &recipient,
-                &amount,
-            );
-        }
-
-        // Member bookkeeping.
         for m in defaulted.iter() {
-            let mut rec = load_member(&env, circle_id, &m);
-            rec.missed += 1;
-            rec.missed_rounds.push_back(round);
-            save_member(&env, circle_id, &m, &rec);
+            let mut st = load_member(&env, circle_id, &m)?;
+            st.missed += 1;
+            st.missed_rounds.push_back(round);
+            save_member(&env, circle_id, &m, &st);
         }
-        let mut rrec = load_member(&env, circle_id, &recipient);
-        rrec.received += amount;
-        save_member(&env, circle_id, &recipient, &rrec);
+        let mut rst = load_member(&env, circle_id, &recipient)?;
+        rst.received = true;
+        rst.received_gross = add(rst.received_gross, amount);
+        credit_raw(&mut rst, amount);
+        save_member(&env, circle_id, &recipient, &rst);
 
-        // Round history.
         let settled = RoundStatus {
             circle_id,
             round,
@@ -474,12 +760,16 @@ impl AjoContract {
             pot: amount,
             settled: true,
             payout_ready: false,
+            covered_from_collateral: 0,
+            debts_created: 0,
+            to_debts: 0,
+            withheld: 0,
+            to_claimable: amount,
         };
-        let rkey = DataKey::Round(circle_id, round);
-        env.storage().persistent().set(&rkey, &settled);
-        extend_persistent(&env, &rkey);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Round(circle_id, round), &settled);
 
-        // Advance.
         let now = env.ledger().timestamp();
         circle.round = round + 1;
         circle.round_start = now;
@@ -489,7 +779,7 @@ impl AjoContract {
             circle.status = CircleStatus::Completed;
         }
         save_circle(&env, &circle);
-        extend_instance(&env);
+        bump_circle(&env, &circle, true);
 
         PaidOut {
             circle_id,
@@ -530,23 +820,19 @@ impl AjoContract {
     pub fn get_round_status(env: Env, circle_id: u32, round: u32) -> Result<RoundStatus, Error> {
         let circle = load_circle(&env, circle_id)?;
         if round < circle.round {
-            let key = DataKey::Round(circle_id, round);
-            let r: RoundStatus = env
+            return env
                 .storage()
                 .persistent()
-                .get(&key)
-                .ok_or(Error::RoundNotFound)?;
-            extend_persistent(&env, &key);
-            return Ok(r);
+                .get(&DataKey::Round(circle_id, round))
+                .ok_or(Error::RoundNotFound);
         }
         if round > circle.round || circle.status != CircleStatus::Active {
             return Err(Error::RoundNotFound);
         }
-        let n = circle.members.len();
         Ok(RoundStatus {
             circle_id,
             round,
-            recipient: circle.members.get_unchecked(round % n),
+            recipient: circle.members.get_unchecked(round),
             deadline: deadline(&circle),
             paid: circle.paid.clone(),
             unpaid: unpaid_members(&env, &circle),
@@ -554,20 +840,38 @@ impl AjoContract {
             pot: circle.pot,
             settled: false,
             payout_ready: is_ready(&env, &circle),
+            covered_from_collateral: 0,
+            debts_created: 0,
+            to_debts: 0,
+            withheld: 0,
+            to_claimable: 0,
         })
     }
 
-    /// Contribution history of `member` in a circle.
+    /// Full per-member state (collateral, claimable, debts, totals).
+    pub fn get_member_state(
+        env: Env,
+        circle_id: u32,
+        member: Address,
+    ) -> Result<MemberState, Error> {
+        load_circle(&env, circle_id)?;
+        load_member(&env, circle_id, &member)
+    }
+
+    /// v1-shaped contribution history, derived from `MemberState`.
     pub fn get_member_record(
         env: Env,
         circle_id: u32,
         member: Address,
     ) -> Result<MemberRecord, Error> {
-        let circle = load_circle(&env, circle_id)?;
-        if !circle.members.contains(&member) {
-            return Err(Error::NotMember);
-        }
-        Ok(load_member(&env, circle_id, &member))
+        load_circle(&env, circle_id)?;
+        let st = load_member(&env, circle_id, &member)?;
+        Ok(MemberRecord {
+            paid: st.paid,
+            missed: st.missed,
+            received: st.received_gross,
+            missed_rounds: st.missed_rounds,
+        })
     }
 }
 
