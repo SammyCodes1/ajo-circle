@@ -97,7 +97,7 @@ export default function CreatePage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!w.address) return w.connect();
-    if (w.wrongNetwork) return setError("Switch Freighter to Testnet first.");
+    if (w.wrongNetwork) return setError("Switch your wallet to Testnet first.");
     if (problems.length || contribution === null) return;
     setBusy(true);
     setError(null);
@@ -286,7 +286,7 @@ export default function CreatePage() {
               disabled={!!w.address && (problems.length > 0 || w.wrongNetwork)}
               className="w-full !py-3.5 text-base sm:w-auto sm:min-w-[260px]"
             >
-              {w.address ? (busy ? "Confirm in Freighter…" : "Create circle") : "Connect wallet to create"}
+              {w.address ? (busy ? "Confirm in your wallet…" : "Create circle") : "Connect wallet to create"}
             </Button>
           )}
         </form>

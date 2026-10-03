@@ -1,11 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useWallet } from "./WalletProvider";
-import { Button } from "./ui";
+import { WalletMenu } from "./WalletMenu";
 import { LogoMark } from "./Brand";
-import { shortAddr } from "@/lib/format";
-import { explorer } from "@/lib/config";
 
 export const NAV = [
   { href: "/", label: "Circles", icon: "ring" },
@@ -18,7 +15,6 @@ export function isActive(path: string, href: string) {
 }
 
 export function Header() {
-  const w = useWallet();
   const path = usePathname();
   return (
     <header className="sticky top-0 z-[var(--z-sticky)] border-b border-line/80 bg-paper/80 shadow-[var(--shadow-raised)] backdrop-blur-md backdrop-saturate-150">
@@ -54,23 +50,7 @@ export function Header() {
             );
           })}
         </nav>
-        {w.address ? (
-          <a
-            href={explorer.account(w.address)}
-            target="_blank"
-            rel="noreferrer"
-            className="flex min-h-11 shrink-0 items-center gap-2 rounded-lg border border-line bg-ivory px-3 font-mono text-xs text-ink-soft transition-colors hover:border-line-strong"
-            title={w.address}
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${w.wrongNetwork ? "bg-rust" : "bg-sage-bright"}`} />
-            {shortAddr(w.address)}
-          </a>
-        ) : (
-          <Button onClick={w.connect} loading={w.connecting} variant="ink" className="shrink-0 !px-3.5">
-            <span className="sm:hidden">Connect</span>
-            <span className="hidden sm:inline">Connect wallet</span>
-          </Button>
-        )}
+        <WalletMenu />
       </div>
     </header>
   );

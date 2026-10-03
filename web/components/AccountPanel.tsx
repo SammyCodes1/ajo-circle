@@ -1,6 +1,5 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { addToken } from "@stellar/freighter-api";
 import { useWallet } from "./WalletProvider";
 import { Alert, Button, Card, Skeleton, TxLink } from "./ui";
 import { AccountStatus, addTrustline, fundWithFriendbot, getAccountStatus } from "@/lib/stellar";
@@ -141,23 +140,6 @@ export function AccountPanel({ need }: { need?: bigint }) {
           demo operator to run{" "}
           <code className="break-all font-mono text-xs">./scripts/fund-test-usdc.sh {w.address}</code>
         </Alert>
-      )}
-      {status?.hasTrustline && (
-        <button
-          className="inline-flex min-h-11 items-center text-xs text-muted underline-offset-2 transition-colors hover:text-ink hover:underline"
-          onClick={() =>
-            run("add", async () => {
-              const r = await addToken({
-                contractId: config.tokenId,
-                networkPassphrase: config.networkPassphrase,
-              });
-              if (r.error) throw new Error(r.error.message);
-              return "Token added to Freighter.";
-            })
-          }
-        >
-          Show {config.tokenCode} in Freighter →
-        </button>
       )}
       {msg && <Alert tone="success">{msg}</Alert>}
       {err && <Alert tone="error">{err}</Alert>}

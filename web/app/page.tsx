@@ -28,7 +28,7 @@ const STEPS = [
   {
     n: "02",
     t: "Everyone contributes",
-    d: "Each round, every member pays their share into the contract — signed in Freighter, settled in seconds.",
+    d: "Each round, every member pays their share into the contract — signed in your Stellar wallet, settled in seconds.",
   },
   {
     n: "03",

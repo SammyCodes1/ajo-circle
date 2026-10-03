@@ -47,14 +47,14 @@ But it runs on trust in one person — the collector (*alajo*):
 | Trustworthy records | Every contribution, payout and **missed payment (default)** is on-chain and emitted as events. |
 | Group can't be stuck by one person | **Anyone** can trigger the payout once everyone has paid *or* the round deadline passes; unpaid members are recorded as defaulted. |
 | Cheap & fast for small amounts | Stellar fees are fractions of a cent and finality is ~5 s — fine for ₦5,000-sized contributions. |
-| Familiar wallets | Members sign with **Freighter**; USDC trustlines and balances are standard Stellar. |
+| Familiar wallets | Members sign with **any Stellar wallet** via Stellar Wallets Kit (Freighter, Albedo, xBull, LOBSTR, Hana, Rabet, optional WalletConnect); USDC trustlines and balances are standard Stellar. |
 
 ## Architecture
 
 ```
 ┌────────────────────────────┐        ┌───────────────────────────────┐
 │  web/ (Next.js App Router) │        │  Stellar Testnet              │
-│  - Freighter connect/sign  │  RPC   │  ┌─────────────────────────┐  │
+│  - Wallets Kit connect/sign│  RPC   │  ┌─────────────────────────┐  │
 │  - network/trustline/      ├───────►│  │ Ajo contract (Soroban)  │  │
 │    balance checks          │        │  │  circles, rounds,       │  │
 │  - create / contribute /   │        │  │  member records, events │  │
@@ -68,7 +68,7 @@ contracts/ajo   Rust, soroban-sdk 28     scripts/   stellar CLI deploy + e2e + f
 ```
 
 - **contracts/ajo** — the Soroban contract (Rust, `soroban-sdk` 28) + unit tests.
-- **web** — Next.js 16 + TypeScript + Tailwind v4, `@stellar/stellar-sdk` 17 and `@stellar/freighter-api` 6. Reads use RPC simulation; writes are built → `prepareTransaction` → signed in Freighter → submitted → polled. No secrets in the frontend; all config is `NEXT_PUBLIC_*` public IDs.
+- **web** — Next.js 16 + TypeScript + Tailwind v4, `@stellar/stellar-sdk` 17 and `@creit.tech/stellar-wallets-kit` 2.7. Reads use RPC simulation; writes are built → `prepareTransaction` → signed in the connected wallet (`StellarWalletsKit.signTransaction` with the testnet passphrase and address) → submitted → polled. No secrets in the frontend; all config is `NEXT_PUBLIC_*` public IDs.
 - **scripts** — `stellar` CLI scripts to deploy to testnet, run an end-to-end cycle, and fund a demo wallet with test USDC.
 
 ## Contract API
@@ -121,13 +121,32 @@ Deployment transactions: [SAC deploy](https://stellar.expert/explorer/testnet/tx
 
 A second scripted run (circle #1, with on-chain JSON state dumps) is in [`deployments/testnet-e2e.md`](deployments/testnet-e2e.md).
 
+## Wallets
+
+The web app uses **[Stellar Wallets Kit](https://stellarwalletskit.dev/)** (`@creit.tech/stellar-wallets-kit` 2.7.0) — one *Connect wallet* button opens the kit's picker, themed to match the app.
+
+| Wallet | Type | Notes |
+|---|---|---|
+| Freighter | extension / mobile | Listed first among wallets; reports its network, so the app shows a **Wrong network** banner and follows account switches. |
+| Albedo | web (no install) | Opens an albedo.link popup — the zero-install option for judges and new users. |
+| xBull | extension / PWA | |
+| LOBSTR | extension | |
+| Hana | extension | |
+| Rabet | extension | |
+| WalletConnect | mobile wallets via QR | **Optional** — only enabled when `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` is set (free project id from [Reown Cloud](https://cloud.reown.com)); rebuild after setting it. |
+
+- The picker lists installed/available wallets first (most recently used on top), then the rest with an *Install* link.
+- The chosen wallet and address are remembered (the kit's `localStorage` keys) and restored on reload; the header chip shows wallet name + short address with **Copy address**, **Switch wallet** and **Disconnect**.
+- Every transaction is signed with the Testnet passphrase from `NEXT_PUBLIC_NETWORK_PASSPHRASE`. Only Freighter exposes its current network; for other wallets the app can't detect a mismatch, so it reminds you to keep the wallet on Testnet.
+- The kit is loaded with dynamic `import()` on the client only (SSR-safe). Without a WalletConnect project id, `next.config.ts` aliases the kit's WalletConnect module to a stub so the Reown/WalletConnect bundle is never shipped.
+
 ## Run it
 
 ### Prerequisites
 
 - **Rust** ≥ 1.84 with the `wasm32v1-none` target, and **Stellar CLI** 28.x ([docs](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup))
 - **Node.js ≥ 22.12** (required by `@stellar/stellar-sdk` 17)
-- **Freighter** browser extension, switched to **Testnet** (Settings → Network)
+- A Stellar wallet on **Testnet** — e.g. the **Freighter** extension (Settings → Network → Testnet), or **Albedo** in the browser with nothing to install (see [Wallets](#wallets))
 
 ### Windows (PowerShell)
 
@@ -157,7 +176,7 @@ Deploy your own copy and fund a wallet (optional):
 Set-ExecutionPolicy -Scope Process Bypass        # allow local scripts for this session
 .\scripts\deploy-testnet.ps1                     # creates ajo-admin / ajo-issuer identities, deploys token SAC + contract
 # copy the printed IDs into web\.env.local (NEXT_PUBLIC_*), then:
-.\scripts\fund-test-usdc.ps1 -Destination G...YOUR_FREIGHTER_ADDRESS -Amount 500
+.\scripts\fund-test-usdc.ps1 -Destination G...YOUR_WALLET_ADDRESS -Amount 500
 ```
 
 ### Linux / macOS (bash)
@@ -173,16 +192,16 @@ cd web && cp .env.example .env.local && npm install && npm run dev
 # optional: own deployment + scripted end-to-end cycle
 ./scripts/deploy-testnet.sh
 ./scripts/e2e-testnet.sh                       # 3 members, all pay, payout, then a default round
-./scripts/fund-test-usdc.sh G...YOUR_FREIGHTER_ADDRESS 500
+./scripts/fund-test-usdc.sh G...YOUR_WALLET_ADDRESS 500
 ```
 
 > The test-USDC issuer key lives only in the stellar CLI config of the machine that ran the deploy script (default `~/.config/stellar`; list identities with `stellar keys ls`). `fund-test-usdc` must run on that machine. To use the IDs in this README you need the original deployer to fund you, or run your own deploy and update `web/.env.local`.
 
 ## Demo walkthrough (≈3 min)
 
-1. **Setup** (before recording): three Freighter accounts on Testnet (A, B, C). For each: open the app → *Fund with Friendbot* (if new) → *Add USDC trustline* → run `fund-test-usdc` for its address.
-2. **Create** (A): *Create* → 10 USDC, round length *3 minutes (demo)*, paste A, B, C → *Create circle* → sign in Freighter → open the dashboard.
-3. **Contribute**: as A, B and C, press *Contribute 10 USDC* (switch account in Freighter; the page follows). Watch the paid bar and pot fill.
+1. **Setup** (before recording): three testnet wallet accounts (A, B, C) — e.g. Freighter accounts, or Albedo. For each: open the app → *Fund with Friendbot* (if new) → *Add USDC trustline* → run `fund-test-usdc` for its address.
+2. **Create** (A): *Create* → 10 USDC, round length *3 minutes (demo)*, paste A, B, C → *Create circle* → sign in your wallet → open the dashboard.
+3. **Contribute**: as A, B and C, press *Contribute 10 USDC* (switch account in Freighter — the page follows — or use *Switch wallet* in the header). Watch the paid bar and pot fill.
 4. **Payout**: all paid → *Trigger payout* is unlocked → anyone presses it → 30 USDC lands with A; open the explorer link.
 5. **Default**: next round, only A and B pay. Show *Payout locked* + the countdown. When it hits zero, trigger payout → B gets 20 USDC, **C is marked defaulted** in *Settled rounds* and in *My history*.
 6. Show the contract and events on stellar.expert; mention the CLI e2e record and unit tests.

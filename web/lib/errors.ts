@@ -40,7 +40,7 @@ export function friendlyError(err: unknown, ctx: ErrorContext = "read"): string 
     return TOKEN_ERRORS[13];
   if (/resulting balance is not within the allowed range|op_underfunded|insufficient/i.test(raw))
     return "Insufficient balance for this transaction.";
-  if (/declined|rejected|User declined/i.test(raw)) return "You rejected the request in Freighter.";
+  if (/declined|rejected|denied|cancel/i.test(raw)) return "You rejected the request in your wallet.";
   if (/Account not found|404/i.test(raw))
     return "This account doesn't exist on testnet yet. Fund it with Friendbot first.";
   if (/txBadSeq/i.test(raw)) return "Sequence number mismatch — please retry.";

@@ -12,7 +12,7 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
-import { signTransaction } from "@stellar/freighter-api";
+import { kitError, loadWalletKit } from "./walletKit";
 import { config } from "./config";
 
 export const rpcServer = new rpc.Server(config.rpcUrl);
@@ -45,15 +45,20 @@ export interface TxResult {
 }
 
 async function signAndSend(built: ReturnType<TransactionBuilder["build"]>, address: string) {
-  const signed = await signTransaction(built.toXDR(), {
-    networkPassphrase: config.networkPassphrase,
-    address,
-  });
-  if (signed.error) throw new Error(signed.error.message ?? String(signed.error));
-  return TransactionBuilder.fromXDR(signed.signedTxXdr, config.networkPassphrase);
+  const kit = await loadWalletKit();
+  let signedTxXdr: string;
+  try {
+    ({ signedTxXdr } = await kit.signTransaction(built.toXDR(), {
+      networkPassphrase: config.networkPassphrase,
+      address,
+    }));
+  } catch (e) {
+    throw kitError(e);
+  }
+  return TransactionBuilder.fromXDR(signedTxXdr, config.networkPassphrase);
 }
 
-/** Build, simulate/prepare, sign with Freighter, submit and wait for a contract call. */
+/** Build, simulate/prepare, sign with the connected wallet, submit and wait for a contract call. */
 export async function invokeWrite(
   address: string,
   contractId: string,
@@ -130,7 +135,7 @@ export async function getAccountStatus(address: string): Promise<AccountStatus> 
   }
 }
 
-/** Add a trustline for the test USDC asset (classic changeTrust op, signed in Freighter). */
+/** Add a trustline for the test USDC asset (classic changeTrust op, signed in your wallet). */
 export async function addTrustline(address: string): Promise<string> {
   const acc = await horizon.loadAccount(address);
   const tx = new TransactionBuilder(acc, {

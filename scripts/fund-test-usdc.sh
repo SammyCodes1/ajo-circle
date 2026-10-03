@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Send TEST "USDC" (testnet only, issued by the throwaway ajo-issuer identity)
-# to any testnet account, e.g. your Freighter account.
+# to any testnet account, e.g. your wallet account.
 #
 #   ./scripts/fund-test-usdc.sh G...YOURADDRESS [amount_in_usdc=500]
 #
 # The destination must already hold a USDC trustline for this issuer. Use the
-# "Add USDC trustline" button in the web app (signs with Freighter), or for a
+# "Add USDC trustline" button in the web app (signs with your wallet), or for a
 # CLI identity: ./scripts/fund-test-usdc.sh <identity-name> 500 --trust
 set -euo pipefail
 cd "$(dirname "$0")/.."

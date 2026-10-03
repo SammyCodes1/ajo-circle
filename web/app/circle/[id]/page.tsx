@@ -101,7 +101,7 @@ export default function CirclePage() {
 
   async function contribute() {
     if (!me) return w.connect();
-    if (w.wrongNetwork) return setTxErr("Switch Freighter to Testnet first.");
+    if (w.wrongNetwork) return setTxErr("Switch your wallet to Testnet first.");
     setBusy("contribute");
     setTxErr(null);
     setTxMsg(null);
@@ -131,7 +131,7 @@ export default function CirclePage() {
 
   async function payout() {
     if (!me) return w.connect();
-    if (w.wrongNetwork) return setTxErr("Switch Freighter to Testnet first.");
+    if (w.wrongNetwork) return setTxErr("Switch your wallet to Testnet first.");
     setBusy("payout");
     setTxErr(null);
     setTxMsg(null);

@@ -139,3 +139,45 @@ body {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ------------------------------------------------------------------
+   Stellar Wallets Kit picker — themed via kitTheme (lib/walletKit.ts);
+   these rules only fix layering, spacing and tap targets.
+   The kit's own classes are !important, hence the !important here.
+   ------------------------------------------------------------------ */
+section.stellar-wallets-kit {
+  z-index: var(--z-overlay) !important;
+}
+section.stellar-wallets-kit > div:first-child {
+  background: rgb(31 30 29 / 0.42) !important;
+  backdrop-filter: blur(3px);
+}
+section.stellar-wallets-kit > section {
+  width: calc(100% - 2rem) !important;
+  max-height: min(34rem, calc(100dvh - 4rem)) !important;
+  border: 1px solid var(--color-line);
+  overscroll-behavior: contain;
+}
+section.stellar-wallets-kit li {
+  min-height: 3rem;
+}
+section.stellar-wallets-kit button {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+.pop-in {
+  animation: pop-in 0.18s var(--ease-calm) both;
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+.press {
+  transition-property: background-color, border-color, color, transform;
+  transition-duration: 0.2s;
+  transition-timing-function: var(--ease-calm);
+}
+.press:active {
+  transform: scale(0.97);
+}

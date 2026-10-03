@@ -1,10 +1,10 @@
-# Send TEST "USDC" (testnet only) to any testnet account, e.g. your Freighter account.
+# Send TEST "USDC" (testnet only) to any testnet account, e.g. your wallet account.
 #
 #   .\scripts\fund-test-usdc.ps1 -Destination G...YOURADDRESS [-Amount 500]
 #   .\scripts\fund-test-usdc.ps1 -Destination ajo-m1 -Amount 100 -Trust   # CLI identity
 #
 # The destination must already trust the test USDC asset. Use the
-# "Add USDC trustline" button in the web app (signs with Freighter), or -Trust
+# "Add USDC trustline" button in the web app (signs with your wallet), or -Trust
 # for a stellar CLI identity. Requires the ajo-issuer identity created by
 # deploy-testnet.ps1 / deploy-testnet.sh on THIS machine.
 param(
