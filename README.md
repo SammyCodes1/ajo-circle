@@ -108,7 +108,7 @@ PROPTEST_CASES=10000 cargo test --release -p ajo prop_ -- --nocapture
 
 ## Testnet deployment
 
-> **v2 (default protection):** contract ID **TBD**. It will be deployed only after the audit clears a specific commit.
+> **v2 (default protection):** [`CBQYDQ5UIHNRGXMCN3K52ZLTSDYJYSPDADKHMI5TKULYW6ZU7OVNLOOD`](https://stellar.expert/explorer/testnet/contract/CBQYDQ5UIHNRGXMCN3K52ZLTSDYJYSPDADKHMI5TKULYW6ZU7OVNLOOD) · wasm sha256 `b406cca803dac46f68840399bd018667750cb2066bdeec96a768f6dc55006e31` (commit `5f7488e`, audited). Deploy: [upload](https://stellar.expert/explorer/testnet/tx/4a081ce4c41f6849adc458f22bde623e85696cca6b4251706885642e71e091c1) · [deploy](https://stellar.expert/explorer/testnet/tx/a0e968d940a90ac2036f89b11ac57d70d06cf468e424f8c22da9f9658175c0fd). Smoke test: [`deployments/testnet-e2e-v2.md`](deployments/testnet-e2e-v2.md).
 >
 > **v1 is deprecated:** `CBH6266NK6UGOLQ6NEUWM7EYANTMHOB5CLCJ27LZ3ARAARP52CIST4EZ` had **no default protection** (a member could take their pot and stop paying; see the audit). Don't use it for new circles. The IDs and runs below are the v1 record.
 
