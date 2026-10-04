@@ -12,6 +12,8 @@
 #                                      -> m2 claimable 30, m1 collateral 10
 #   (e) r2: m3 skips its own round; settle
 #   (f) everyone claims                -> every net exactly 0, contract balance 0
+#   (w) "Circle #5" walk-away: m1 receives round 1, then stops paying; no one
+#       posted collateral. Honest members m2, m3 must end with net >= 0
 #   (g) second circle: one member never accepts -> cancel after the window,
 #       the member that accepted claims its refund
 # "USDC" is the project's own TEST token (not Circle's USDC, no value).
@@ -126,7 +128,40 @@ for i in 1 2 3; do
   tin=$(field $CID "$a" total_in); tout=$(field $CID "$a" total_claimed)
   expect "m$i net (claimed - paid in)" "$((tout - tin))" "0"
 done
-expect "contract balance back to start" "$(bal "$AJO_CONTRACT_ID")" "$B0"
+# Other circles on the same contract may be live, so the contract balance is recorded, not asserted.
+note "contract balance after (f): $(bal "$AJO_CONTRACT_ID") (before: $B0)"
+
+echo "== (w) Circle #5 walk-away: round-1 receiver stops paying, nobody posts collateral" >&2
+CID3=$(step "(w) create_circle 3" inv --source-account $P-v2-m1 -- create_circle \
+  --admin "$M1" --contribution $C --members "[\"$M1\",\"$M2\",\"$M3\"]" \
+  --period_secs ${WALK_PERIOD:-60} --join_window_secs $JOIN)
+for i in 1 2 3; do
+  step "(w) m$i accepts with 0" inv --source-account $P-v2-m$i -- accept --circle_id $CID3 --member "$(stellar keys address $P-v2-m$i)" --collateral 0 >/dev/null
+done
+for i in 1 2 3; do
+  step "(w) r0 contribute m$i" inv --source-account $P-v2-m$i -- contribute --circle_id $CID3 --member "$(stellar keys address $P-v2-m$i)" >/dev/null
+done
+step "(w) r0 settle -> m1" inv --source-account $P-v2-m2 -- settle --circle_id $CID3 >/dev/null
+note "(w) m1 after r0: claimable $(field $CID3 "$M1" claimable), collateral withheld $(field $CID3 "$M1" collateral)"
+step "(w) m1 claims what it can" inv --source-account $P-v2-m1 -- claim --circle_id $CID3 --member "$M1" >/dev/null
+for r in 1 2; do
+  step "(w) r$r contribute m2" inv --source-account $P-v2-m2 -- contribute --circle_id $CID3 --member "$M2" >/dev/null
+  step "(w) r$r contribute m3" inv --source-account $P-v2-m3 -- contribute --circle_id $CID3 --member "$M3" >/dev/null
+  settle_when_ready $CID3 "(w) r$r settle (m1 walked away) by non-member" $P-admin
+done
+for i in 1 2 3; do
+  a=$(stellar keys address $P-v2-m$i)
+  if [[ "$(field $CID3 "$a" claimable)" != "0" ]]; then
+    step "(w) claim m$i" inv --source-account $P-v2-m$i -- claim --circle_id $CID3 --member "$a" >/dev/null
+  fi
+  tin=$(field $CID3 "$a" total_in); tout=$(field $CID3 "$a" total_claimed)
+  note "(w) m$i paid in $tin, claimed $tout, net $((tout - tin))"
+done
+for i in 2 3; do
+  a=$(stellar keys address $P-v2-m$i)
+  net=$(( $(field $CID3 "$a" total_claimed) - $(field $CID3 "$a" total_in) ))
+  [[ $net -ge 0 ]] && note "ok: honest m$i net $net >= 0" || fail "honest m$i net $net < 0"
+done
 
 echo "== (g) cancel: one member never accepts" >&2
 CID2=$(step "(g) create_circle 2" inv --source-account $P-v2-m4 -- create_circle \
@@ -143,7 +178,7 @@ sleep $((JOIN + 15))
 step "(g) cancel circle 2" inv --source-account $P-admin -- cancel --circle_id $CID2 >/dev/null
 step "(g) m4 claims refund" inv --source-account $P-v2-m4 -- claim --circle_id $CID2 --member "$M4" >/dev/null
 expect "m4 refunded (total_claimed)" "$(field $CID2 "$M4" total_claimed)" "$C"
-expect "contract balance after (g)" "$(bal "$AJO_CONTRACT_ID")" "$B0"
+note "contract balance at end: $(bal "$AJO_CONTRACT_ID")"
 
 {
   echo "# Testnet end-to-end run (v2)"
@@ -152,7 +187,7 @@ expect "contract balance after (g)" "$(bal "$AJO_CONTRACT_ID")" "$B0"
   echo
   echo "- Ajo v2 contract: [\`$AJO_CONTRACT_ID\`](https://stellar.expert/explorer/testnet/contract/$AJO_CONTRACT_ID)"
   echo "- Token: the project's own test USDC SAC (NOT Circle's USDC, no value): [\`$TOKEN_CONTRACT_ID\`](https://stellar.expert/explorer/testnet/contract/$TOKEN_CONTRACT_ID)"
-  echo "- Circle \`$CID\` (m1 \`$M1\`, m2 \`$M2\`, m3 \`$M3\`) and circle \`$CID2\` (m4 \`$M4\`, m1) · c = 10 · period ${PERIOD}s · join window ${JOIN}s"
+  echo "- Circle \`$CID\` (m1 \`$M1\`, m2 \`$M2\`, m3 \`$M3\`) , walk-away circle \`$CID3\` (m1, m2, m3), and circle \`$CID2\` (m4 \`$M4\`, m1) · c = 10 · period ${PERIOD}s · join window ${JOIN}s"
   echo
   echo "| Step | Transaction |"
   echo "|---|---|"
@@ -164,5 +199,8 @@ expect "contract balance after (g)" "$(bal "$AJO_CONTRACT_ID")" "$B0"
   echo
   echo "## Final member states (circle $CID)"
   for a in "$M1" "$M2" "$M3"; do echo; echo '```json'; mstate $CID "$a"; echo '```'; done
+  echo
+  echo "## Final member states (walk-away circle $CID3)"
+  for a in "$M1" "$M2" "$M3"; do echo; echo '```json'; mstate $CID3 "$a"; echo '```'; done
 } > "$REPORT"
 echo "wrote $REPORT" >&2
